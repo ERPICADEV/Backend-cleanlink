@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String         @id @default(uuid())
+  username      String?        @unique
+  phone         String?        @unique
+  email         String?        @unique
+  passwordHash  String?        @map("password_hash")
+  authProviders Json           @default("[]") @map("auth_providers")
+  avatarUrl     String?        @map("avatar_url")
+  region        Json?
+  isVerified    Boolean        @default(false) @map("is_verified")
+  civicPoints   Int            @default(0) @map("civic_points")
+  civicLevel    Int            @default(1) @map("civic_level")
+  badges        String[]       @default([])
+  trustScore    Float          @default(0.5) @map("trust_score")
+  status        String         @default("active")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  bio           String?
+  adminProfile  Admin?
+  auditLogs     AuditLog[]
+  comments      Comment[]
+  notifications Notification[]
+  redemptions   Redemption[]
+  reports       Report[]
+  votes         Vote[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([username])
+  @@index([trustScore])
+  @@map("users")
+}
+
+model Report {
+  id              String    @id @default(uuid())
+  reporterId      String?   @map("reporter_id")
+  reporterDisplay String    @default("Anonymous") @map("reporter_display")
+  title           String
+  description     String
+  category        String
+  images          Json      @default("[]")
+  location        Json
+  visibility      String    @default("public")
+  aiScore         Json?     @map("ai_score")
+  upvotes         Int       @default(0)
+  downvotes       Int       @default(0)
+  communityScore  Float     @default(0) @map("community_score")
+  status          String    @default("pending")
+  mcdVerifiedBy   String?   @map("mcd_verified_by")
+  mcdResolution   Json?     @map("mcd_resolution")
+  duplicateOf     String?   @map("duplicate_of")
+  flags           Json      @default("[]")
+  isFeatured      Boolean   @default(false) @map("is_featured")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  comments        Comment[]
+  reporter        User?     @relation(fields: [reporterId], references: [id])
+  votes           Vote[]
+
+  @@index([reporterId])
+  @@index([category])
+  @@index([status])
+  @@index([createdAt])
+  @@index([upvotes])
+  @@map("reports")
+}
+
+model Comment {
+  id              String    @id @default(uuid())
+  reportId        String    @map("report_id")
+  authorId        String?   @map("author_id")
+  text            String
+  parentCommentId String?   @map("parent_comment_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  author          User?     @relation(fields: [authorId], references: [id])
+  parent          Comment?  @relation("CommentReplies", fields: [parentCommentId], references: [id], onDelete: Cascade)
+  replies         Comment[] @relation("CommentReplies")
+  report          Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@index([authorId])
+  @@index([parentCommentId])
+  @@map("comments")
+}
+
+model Vote {
+  id        String   @id @default(uuid())
+  reportId  String   @map("report_id")
+  userId    String   @map("user_id")
+  value     Int
+  createdAt DateTime @default(now()) @map("created_at")
+  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, userId])
+  @@index([reportId])
+  @@index([userId])
+  @@map("votes")
+}
+
+model Reward {
+  id             String       @id @default(uuid())
+  key            String       @unique
+  title          String
+  description    String
+  requiredPoints Int          @map("required_points")
+  availableFrom  DateTime?    @map("available_from")
+  availableUntil DateTime?    @map("available_until")
+  maxPerUser     Int          @default(1) @map("max_per_user")
+  metadata       Json?
+  redemptions    Redemption[]
+
+  @@map("rewards")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  message   String
+  data      Json?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model Redemption {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  rewardId    String   @map("reward_id")
+  status      String   @default("requested")
+  requestData Json?    @map("request_data")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  reward      Reward   @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([rewardId])
+  @@map("redemptions")
+}
+
+model Admin {
+  id             String  @id @default(uuid())
+  userId         String  @unique @map("user_id")
+  regionAssigned Json?   @map("region_assigned")
+  role           String  @default("viewer")
+  apiKey         String? @map("api_key")
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admins")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?  @map("actor_id")
+  actionType String   @map("action_type")
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  actor      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
