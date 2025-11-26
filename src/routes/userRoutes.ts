@@ -1,14 +1,20 @@
 import { Router } from 'express';
-import { getMe, updateMe, getPublicProfile, getRegions, updateRegion } from '../controllers/userController';
+import { 
+  getMe, 
+  updateMe, 
+  getPublicProfile, 
+  getRegions, 
+  updateRegion 
+} from '../controllers/userController-sqlite';
 import { authMiddleware } from '../middleware/auth';
-import { authenticatedLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-router.get('/me', authMiddleware, authenticatedLimiter, getMe);
-router.patch('/me', authMiddleware, authenticatedLimiter, updateMe);
-router.patch('/me/region', authMiddleware, authenticatedLimiter, updateRegion);
-router.get('/regions', getRegions); // Public
-router.get('/:id/public', getPublicProfile); // Public
+// SQLite endpoints
+router.get('/me', authMiddleware, getMe);
+router.patch('/me', authMiddleware, updateMe);
+router.get('/:id/public', getPublicProfile);
+router.get('/regions', getRegions);
+router.patch('/me/region', authMiddleware, updateRegion);
 
 export default router;

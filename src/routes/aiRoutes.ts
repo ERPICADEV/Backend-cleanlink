@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { updateAIResult, getPendingAIReports } from '../controllers/aiController';
-import { apiKeyMiddleware } from '../middleware/apiKeyMiddleware';
+import { 
+  updateAIResult, 
+  getPendingAIReports 
+} from '../controllers/aiController-sqlite';
 
 const router = Router();
 
-// Protect all AI routes with API key
-router.use(apiKeyMiddleware);
-
+// SQLite endpoints
 router.post('/reports/:id/result', updateAIResult);
 router.get('/reports/pending', getPendingAIReports);
 

@@ -5,22 +5,17 @@ import {
   createReward, 
   updateReward, 
   deleteReward 
-} from '../controllers/rewardController';
+} from '../controllers/rewardController-sqlite';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware } from '../middleware/adminMiddleware';
-import { authenticatedLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// Public
+// SQLite endpoints
 router.get('/', getRewards);
-
-// User routes
-router.post('/:id/redeem', authMiddleware, authenticatedLimiter, redeemReward);
-
-// Admin routes
-router.post('/', authMiddleware, adminMiddleware, authenticatedLimiter, createReward);
-router.patch('/:id', authMiddleware, adminMiddleware, authenticatedLimiter, updateReward);
-router.delete('/:id', authMiddleware, adminMiddleware, authenticatedLimiter, deleteReward);
+router.post('/:id/redeem', authMiddleware, redeemReward);
+router.post('/', authMiddleware, adminMiddleware, createReward);
+router.patch('/:id', authMiddleware, adminMiddleware, updateReward);
+router.delete('/:id', authMiddleware, adminMiddleware, deleteReward);
 
 export default router;

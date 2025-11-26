@@ -1,11 +1,15 @@
 import { Router } from 'express';
-import { getMapReports, getMapClusters, getMapStats } from '../controllers/mapController';
-import { optionalAuthMiddleware } from '../middleware/auth';
+import { 
+  getMapReports, 
+  getMapClusters, 
+  getMapStats 
+} from '../controllers/mapController-sqlite';
 
 const router = Router();
 
-router.get('/reports', optionalAuthMiddleware, getMapReports);
-router.get('/clusters', optionalAuthMiddleware, getMapClusters);
-router.get('/stats', optionalAuthMiddleware, getMapStats);
+// SQLite endpoints
+router.get('/reports', getMapReports);
+router.get('/clusters', getMapClusters);
+router.get('/stats', getMapStats);
 
 export default router;

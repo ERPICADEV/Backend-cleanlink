@@ -1,11 +1,15 @@
 import { Router } from 'express';
-   import { signup, login, refreshTokenHandler } from '../controllers/authController';
-   import { unauthenticatedLimiter } from '../middleware/rateLimiter';
+import { 
+  signup, 
+  login, 
+  refreshTokenHandler 
+} from '../controllers/authController-sqlite';
 
-   const router = Router();
+const router = Router();
 
-   router.post('/signup', unauthenticatedLimiter, signup);
-   router.post('/login', unauthenticatedLimiter, login);
-   router.post('/refresh', unauthenticatedLimiter, refreshTokenHandler);
+// SQLite endpoints
+router.post('/signup', signup);
+router.post('/login', login);
+router.post('/refresh', refreshTokenHandler);
 
-   export default router;
+export default router;

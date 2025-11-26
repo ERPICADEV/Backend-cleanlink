@@ -2,8 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
-import prisma from './config/database';
 import redis from './config/redis';
+
+// Import SQLite routes
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import reportRoutes from './routes/reportRoutes';
@@ -14,6 +15,10 @@ import rewardRoutes from './routes/rewardRoutes';
 import aiRoutes from './routes/aiRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import mapRoutes from './routes/mapRoutes';
+
+import './utils/queue';
+import db from './config/sqlite'
+
 dotenv.config();
 
 const app = express();
@@ -21,11 +26,10 @@ const PORT = process.env.PORT || 3000;
 
 app.use(helmet());
 app.use(cors());
-// Increase payload limit for image uploads
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Routes
+// SQLite Routes ONLY
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/reports', reportRoutes);
@@ -36,11 +40,12 @@ app.use('/api/v1/rewards', rewardRoutes);
 app.use('/internal/ai', aiRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/map', mapRoutes);
-// Health check
+
+// Health check (SQLite only)
 app.get('/health', async (req, res) => {
   try {
-    // Test DB connection
-    await prisma.$queryRaw`SELECT 1`;
+    // Test SQLite connection
+    db.prepare('SELECT 1').get();
     
     // Test Redis connection
     await redis.ping();
@@ -48,7 +53,7 @@ app.get('/health', async (req, res) => {
     res.json({ 
       status: 'ok', 
       service: 'cleanlink-api',
-      database: 'connected',
+      database: 'connected (SQLite)',
       redis: 'connected'
     });
   } catch (error) {
@@ -60,7 +65,39 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Debug routes for AI testing
+// SQLite test endpoints
+app.get('/sqlite-reports', (req, res) => {
+  try {
+    const stmt = db.prepare('SELECT id, title, upvotes, downvotes FROM reports LIMIT 10')
+    const reports = stmt.all()
+    
+    res.json({
+      data: reports,
+      count: reports.length,
+      message: 'Reports from SQLite database'
+    })
+  } catch (error: any) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.get('/sqlite-reports/:id', (req, res) => {
+  try {
+    const { id } = req.params
+    const stmt = db.prepare('SELECT * FROM reports WHERE id = ?')
+    const report: any = stmt.get(id)
+    
+    if (!report) {
+      return res.status(404).json({ error: 'Report not found' })
+    }
+    
+    res.json(report)
+  } catch (error: any) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Debug routes
 app.get('/debug/queue-status', async (req, res) => {
   try {
     const queueLength = await redis.llen('ai_processing_queue');
@@ -114,8 +151,5 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 CleanLink API running on port ${PORT}`);
+  console.log(`🚀 CleanLink API (SQLite) running on port ${PORT}`);
 });
-
-// Start AI queue processor
-import './utils/queue';

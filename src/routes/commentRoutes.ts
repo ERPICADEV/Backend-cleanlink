@@ -4,19 +4,15 @@ import {
   getComments, 
   updateComment, 
   deleteComment 
-} from '../controllers/commentController';
-import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
-import { commentAuthorMiddleware } from '../middleware/commentMiddleware';
-import { authenticatedLimiter } from '../middleware/rateLimiter';
+} from '../controllers/commentController-sqlite';
+import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-// Report comments
-router.post('/:id/comments', authMiddleware, authenticatedLimiter, createComment);
-router.get('/:id/comments', optionalAuthMiddleware, getComments);
-
-// Comment management (separate routes for comment operations)
-router.patch('/comments/:id', authMiddleware, commentAuthorMiddleware, authenticatedLimiter, updateComment);
-router.delete('/comments/:id', authMiddleware, commentAuthorMiddleware, authenticatedLimiter, deleteComment);
+// SQLite endpoints
+router.post('/:id/comments', authMiddleware, createComment);
+router.get('/:id/comments', getComments);
+router.patch('/comments/:id', authMiddleware, updateComment);
+router.delete('/comments/:id', authMiddleware, deleteComment);
 
 export default router;

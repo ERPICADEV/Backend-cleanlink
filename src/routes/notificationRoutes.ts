@@ -1,14 +1,14 @@
 import { Router } from 'express';
-import { getNotifications, getUnreadCount } from '../controllers/notificationController';
+import { 
+  getNotifications, 
+  getUnreadCount 
+} from '../controllers/notificationController-sqlite';
 import { authMiddleware } from '../middleware/auth';
-import { authenticatedLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-router.use(authMiddleware);
-router.use(authenticatedLimiter);
-
-router.get('/', getNotifications);
-router.get('/unread-count', getUnreadCount);
+// SQLite endpoints
+router.get('/', authMiddleware, getNotifications);
+router.get('/unread-count', authMiddleware, getUnreadCount);
 
 export default router;

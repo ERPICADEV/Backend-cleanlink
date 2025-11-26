@@ -4,21 +4,16 @@ import {
   assignReport, 
   resolveReport, 
   getReportAuditLogs 
-} from '../controllers/adminController';
+} from '../controllers/adminController-sqlite';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware } from '../middleware/adminMiddleware';
-import { authenticatedLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// All admin routes require authentication and admin privileges
-router.use(authMiddleware);
-router.use(adminMiddleware);
-router.use(authenticatedLimiter);
-
-router.get('/reports', getAdminReports);
-router.patch('/reports/:id/assign', assignReport);
-router.patch('/reports/:id/resolve', resolveReport);
-router.get('/audit/reports/:id', getReportAuditLogs);
+// SQLite endpoints
+router.get('/reports', authMiddleware, adminMiddleware, getAdminReports);
+router.patch('/reports/:id/assign', authMiddleware, adminMiddleware, assignReport);
+router.patch('/reports/:id/resolve', authMiddleware, adminMiddleware, resolveReport);
+router.get('/audit/reports/:id', authMiddleware, adminMiddleware, getReportAuditLogs);
 
 export default router;

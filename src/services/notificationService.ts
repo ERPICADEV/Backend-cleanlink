@@ -1,11 +1,11 @@
-import prisma from '../config/database';
-import { Prisma } from '@prisma/client';
+import db from '../config/sqlite'
+import { randomUUID } from 'crypto'
 
 export interface NotificationData {
-  points_earned?: number;
-  report_id?: string;
-  new_level?: number;
-  achievement?: string;
+  points_earned?: number
+  report_id?: string
+  new_level?: number
+  achievement?: string
 }
 
 export class NotificationService {
@@ -17,20 +17,27 @@ export class NotificationService {
     data?: NotificationData
   ) {
     try {
-      const notification = await prisma.notification.create({
-        data: {
-          userId,
-          type,
-          title,
-          message,
-          data: (data || {}) as Prisma.InputJsonValue,
-        },
-      });
+      const id = randomUUID()
+      const stmt = db.prepare(
+        'INSERT INTO notifications (id, userId, type, title, message, data, createdAt, isRead) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
       
-      console.log(`🔔 Notification created for user ${userId}: ${title}`);
-      return notification;
+      const result = stmt.run(
+        id,
+        userId,
+        type,
+        title,
+        message,
+        JSON.stringify(data || {}),
+        new Date().toISOString(),
+        false
+      )
+      
+      console.log(`📬 Notification created for user ${userId}: ${title}`)
+      return { id, userId, type, title, message, data: data || {} }
     } catch (error) {
-      console.error('Failed to create notification:', error);
+      console.error('Failed to create notification:', error)
+      return null
     }
   }
 
@@ -42,7 +49,7 @@ export class NotificationService {
       'Report Resolved! 🎉',
       `Your garbage report has been cleaned by MCD. You earned ${points} civic points!`,
       { points_earned: points, report_id: reportId, new_level: level }
-    );
+    )
   }
 
   static async notifyLevelUp(userId: string, newLevel: number, levelName: string) {
@@ -52,7 +59,7 @@ export class NotificationService {
       'Level Up! ⭐',
       `Congratulations! You've reached ${levelName} (Level ${newLevel})`,
       { new_level: newLevel }
-    );
+    )
   }
 
   static async notifyPointsEarned(userId: string, points: number, reason: string) {
@@ -62,6 +69,6 @@ export class NotificationService {
       'Points Earned! 💰',
       `You earned ${points} points for ${reason}`,
       { points_earned: points }
-    );
+    )
   }
 }

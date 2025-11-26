@@ -1,0 +1,238 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.deleteComment = exports.updateComment = exports.getComments = exports.createComment = void 0;
+const sqlite_1 = __importDefault(require("../config/sqlite"));
+const crypto_1 = require("crypto");
+// POST /api/v1/reports/:id/comments
+const createComment = async (req, res) => {
+    try {
+        const { id: reportId } = req.params;
+        const { text, parent_comment_id } = req.body;
+        // Validations
+        if (!text || text.trim().length === 0 || text.length > 1000) {
+            return res.status(400).json({
+                error: {
+                    code: 'VALIDATION_ERROR',
+                    message: 'Comment text required and must be ≤ 1000 chars',
+                    fields: { text: 'Invalid comment text' },
+                },
+            });
+        }
+        // Check if report exists
+        const reportStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
+        const report = reportStmt.get(reportId);
+        if (!report) {
+            return res.status(404).json({
+                error: { code: 'NOT_FOUND', message: 'Report not found' },
+            });
+        }
+        // Check if parent comment exists and belongs to same report (if provided)
+        if (parent_comment_id) {
+            const parentStmt = sqlite_1.default.prepare('SELECT id FROM comments WHERE id = ? AND report_id = ?');
+            const parentComment = parentStmt.get(parent_comment_id, reportId);
+            if (!parentComment) {
+                return res.status(404).json({
+                    error: { code: 'NOT_FOUND', message: 'Parent comment not found for this report' },
+                });
+            }
+        }
+        // Basic anti-spam: Check for recent comments from same user
+        const recentStmt = sqlite_1.default.prepare(`
+      SELECT COUNT(*) as count FROM comments 
+      WHERE author_id = ? AND created_at >= datetime('now', '-1 minute')
+    `);
+        const recentResult = recentStmt.get(req.userId);
+        const recentComments = recentResult.count;
+        if (recentComments >= 5) {
+            return res.status(429).json({
+                error: {
+                    code: 'RATE_LIMIT',
+                    message: 'Too many comments. Please wait before commenting again.',
+                },
+            });
+        }
+        // Create comment
+        const commentId = (0, crypto_1.randomUUID)();
+        const insertStmt = sqlite_1.default.prepare(`
+      INSERT INTO comments (id, report_id, author_id, text, parent_comment_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `);
+        insertStmt.run(commentId, reportId, req.userId, text.trim(), parent_comment_id || null);
+        // Get created comment with author info
+        const commentStmt = sqlite_1.default.prepare(`
+      SELECT c.*, u.username, u.badges 
+      FROM comments c 
+      LEFT JOIN users u ON c.author_id = u.id 
+      WHERE c.id = ?
+    `);
+        const comment = commentStmt.get(commentId);
+        return res.status(201).json({
+            id: comment.id,
+            text: comment.text,
+            author: {
+                id: comment.author_id,
+                username: comment.username || 'Anonymous',
+                badges: comment.badges ? JSON.parse(comment.badges) : [],
+            },
+            parent_comment_id: comment.parent_comment_id,
+            created_at: comment.created_at,
+            updated_at: comment.updated_at,
+        });
+    }
+    catch (error) {
+        console.error('Create comment error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to create comment' },
+        });
+    }
+};
+exports.createComment = createComment;
+// GET /api/v1/reports/:id/comments
+const getComments = async (req, res) => {
+    try {
+        const { id: reportId } = req.params;
+        const { limit = 20, include_replies = 'true' } = req.query;
+        // Check if report exists
+        const reportStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
+        const report = reportStmt.get(reportId);
+        if (!report) {
+            return res.status(404).json({
+                error: { code: 'NOT_FOUND', message: 'Report not found' },
+            });
+        }
+        // Get top-level comments (no parent)
+        const commentsStmt = sqlite_1.default.prepare(`
+      SELECT c.*, u.username, u.badges 
+      FROM comments c 
+      LEFT JOIN users u ON c.author_id = u.id 
+      WHERE c.report_id = ? AND c.parent_comment_id IS NULL
+      ORDER BY c.created_at ASC
+      LIMIT ?
+    `);
+        const comments = commentsStmt.all(reportId, parseInt(limit));
+        // Format comments
+        const formatComment = (comment) => {
+            const formatted = {
+                id: comment.id,
+                text: comment.text,
+                author: {
+                    id: comment.author_id,
+                    username: comment.username || 'Anonymous',
+                    badges: comment.badges ? JSON.parse(comment.badges) : [],
+                },
+                parent_comment_id: comment.parent_comment_id,
+                created_at: comment.created_at,
+                updated_at: comment.updated_at,
+            };
+            // Get replies if requested
+            if (include_replies === 'true') {
+                const repliesStmt = sqlite_1.default.prepare(`
+          SELECT c.*, u.username, u.badges 
+          FROM comments c 
+          LEFT JOIN users u ON c.author_id = u.id 
+          WHERE c.parent_comment_id = ?
+          ORDER BY c.created_at ASC
+        `);
+                const replies = repliesStmt.all(comment.id);
+                if (replies.length > 0) {
+                    formatted.replies = replies.map((reply) => formatComment(reply));
+                }
+            }
+            return formatted;
+        };
+        const formattedComments = comments.map((comment) => formatComment(comment));
+        return res.status(200).json({
+            data: formattedComments,
+            paging: null, // Simplified pagination
+        });
+    }
+    catch (error) {
+        console.error('Get comments error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch comments' },
+        });
+    }
+};
+exports.getComments = getComments;
+// PATCH /api/v1/comments/:id
+const updateComment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { text } = req.body;
+        // Validations
+        if (!text || text.trim().length === 0 || text.length > 1000) {
+            return res.status(400).json({
+                error: {
+                    code: 'VALIDATION_ERROR',
+                    message: 'Comment text required and must be ≤ 1000 chars',
+                    fields: { text: 'Invalid comment text' },
+                },
+            });
+        }
+        // Update comment
+        const updateStmt = sqlite_1.default.prepare(`
+      UPDATE comments 
+      SET text = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `);
+        updateStmt.run(text.trim(), id);
+        // Get updated comment with author info
+        const commentStmt = sqlite_1.default.prepare(`
+      SELECT c.*, u.username, u.badges 
+      FROM comments c 
+      LEFT JOIN users u ON c.author_id = u.id 
+      WHERE c.id = ?
+    `);
+        const updatedComment = commentStmt.get(id);
+        if (!updatedComment) {
+            return res.status(404).json({
+                error: { code: 'NOT_FOUND', message: 'Comment not found' },
+            });
+        }
+        return res.status(200).json({
+            id: updatedComment.id,
+            text: updatedComment.text,
+            author: {
+                id: updatedComment.author_id,
+                username: updatedComment.username || 'Anonymous',
+                badges: updatedComment.badges ? JSON.parse(updatedComment.badges) : [],
+            },
+            parent_comment_id: updatedComment.parent_comment_id,
+            created_at: updatedComment.created_at,
+            updated_at: updatedComment.updated_at,
+        });
+    }
+    catch (error) {
+        console.error('Update comment error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to update comment' },
+        });
+    }
+};
+exports.updateComment = updateComment;
+// DELETE /api/v1/comments/:id
+const deleteComment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deleteStmt = sqlite_1.default.prepare('DELETE FROM comments WHERE id = ?');
+        const result = deleteStmt.run(id);
+        if (result.changes === 0) {
+            return res.status(404).json({
+                error: { code: 'NOT_FOUND', message: 'Comment not found' },
+            });
+        }
+        return res.status(200).json({
+            message: 'Comment deleted successfully',
+        });
+    }
+    catch (error) {
+        console.error('Delete comment error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to delete comment' },
+        });
+    }
+};
+exports.deleteComment = deleteComment;
