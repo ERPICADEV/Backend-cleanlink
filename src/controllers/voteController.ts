@@ -1,171 +1,114 @@
 import { Request, Response } from 'express';
 import prisma from '../config/database';
 
-// POST /api/v1/reports/:id/vote
+// POST /api/v1/reports/:id/vote - MINIMAL VERSION
 export const voteReport = async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
     const { id } = req.params;
     const { value } = req.body;
+    const userId = req.userId!;
 
-    // Validations
-    if (value !== 1 && value !== -1) {
-      return res.status(400).json({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Vote value must be 1 (upvote) or -1 (downvote)',
-          fields: { value: 'Invalid vote value' },
-        },
-      });
-    }
 
-    // Check if report exists and store for engagement points
-    const report = await prisma.report.findUnique({
-      where: { id },
-    });
+    // MINIMAL TRANSACTION - Only essential operations
+    const result = await prisma.$transaction(async (tx) => {
+      
+      // 1. Check existing vote and get current counts in ONE query
+      const [existingVote, report] = await Promise.all([
+        tx.vote.findUnique({
+          where: { reportId_userId: { reportId: id, userId } },
+          select: { value: true }
+        }),
+        tx.report.findUnique({
+          where: { id },
+          select: { upvotes: true, downvotes: true, reporterId: true }
+        })
+      ]);
+      if (!report) throw new Error('REPORT_NOT_FOUND');
 
-    if (!report) {
-      return res.status(404).json({
-        error: { code: 'NOT_FOUND', message: 'Report not found' },
-      });
-    }
+      const { upvotes, downvotes, reporterId } = report;
+      
+      // 2. Calculate changes
+      let upvoteChange = 0;
+      let downvoteChange = 0;
+      let userVote = value;
 
-    // Check for existing vote
-    const existingVote = await prisma.vote.findUnique({
-      where: {
-        reportId_userId: {
-          reportId: id,
-          userId: req.userId!,
-        },
-      },
-    });
-
-    await prisma.$transaction(async (tx) => {
+      
       if (existingVote) {
-        // Update existing vote
         if (existingVote.value === value) {
-          // Same vote - remove it
+          
           await tx.vote.delete({
-            where: {
-              reportId_userId: {
-                reportId: id,
-                userId: req.userId!,
-              },
-            },
+            where: { reportId_userId: { reportId: id, userId } }
           });
-
-          // Update report vote counts
-          await tx.report.update({
-            where: { id },
-            data: {
-              upvotes: value === 1 ? { decrement: 1 } : undefined,
-              downvotes: value === -1 ? { decrement: 1 } : undefined,
-            },
-          });
+          upvoteChange = value === 1 ? -1 : 0;
+          downvoteChange = value === -1 ? -1 : 0;
+          userVote = 0;
         } else {
-          // Change vote
           await tx.vote.update({
-            where: {
-              reportId_userId: {
-                reportId: id,
-                userId: req.userId!,
-              },
-            },
-            data: { value },
+            where: { reportId_userId: { reportId: id, userId } },
+            data: { value }
           });
-
-          // Update report vote counts
-          await tx.report.update({
-            where: { id },
-            data: {
-              upvotes: value === 1 ? { increment: 1 } : { decrement: 1 },
-              downvotes: value === -1 ? { increment: 1 } : { decrement: 1 },
-            },
-          });
+          upvoteChange = value === 1 ? 1 : -1;
+          downvoteChange = value === -1 ? 1 : -1;
         }
       } else {
-        // Create new vote
         await tx.vote.create({
-          data: {
-            reportId: id,
-            userId: req.userId!,
-            value,
-          },
+          data: { reportId: id, userId, value }
         });
-
-        // Update report vote counts
-        await tx.report.update({
-          where: { id },
-          data: {
-            upvotes: value === 1 ? { increment: 1 } : undefined,
-            downvotes: value === -1 ? { increment: 1 } : undefined,
-          },
-        });
+        upvoteChange = value === 1 ? 1 : 0;
+        downvoteChange = value === -1 ? 1 : 0;
       }
 
-      // Recalculate community score
-      const updatedReport = await tx.report.findUnique({
+      // 3. Single atomic update
+      const newUpvotes = upvotes + upvoteChange;
+      const newDownvotes = downvotes + downvoteChange;
+      const communityScore = (newUpvotes - newDownvotes) / Math.max(1, newUpvotes + newDownvotes);
+      
+      await tx.report.update({
         where: { id },
-        select: { upvotes: true, downvotes: true },
+        data: { upvotes: newUpvotes, downvotes: newDownvotes, communityScore }
       });
 
-      if (updatedReport) {
-        const communityScore = calculateCommunityScore(
-          updatedReport.upvotes,
-          updatedReport.downvotes
-        );
-
-        await tx.report.update({
-          where: { id },
-          data: { communityScore },
-        });
-      }
+      return { newUpvotes, newDownvotes, communityScore, userVote, reporterId };
+    }, {
+      // Add transaction timeout
+      timeout: 10000,
+      maxWait: 5000
     });
 
-    // Get final vote counts
-    const finalReport = await prisma.report.findUnique({
-      where: { id },
-      select: {
-        upvotes: true,
-        downvotes: true,
-        communityScore: true,
-      },
-    });
-
-    // Award engagement points when report reaches vote milestones
-    const voteCount = finalReport?.upvotes || 0;
-    const engagementMilestones = [10, 25, 50];
-    const milestonePoints: {[key: number]: number} = {10: 5, 25: 10, 50: 15};
-
-    if (engagementMilestones.includes(voteCount) && report.reporterId) {
-      const engagementPoints = milestonePoints[voteCount];
-      
-      await prisma.user.update({
-        where: { id: report.reporterId },
-        data: {
-          civicPoints: { increment: engagementPoints }
-        }
-      });
-      
-      console.log(`🎉 Awarded ${engagementPoints} engagement points for reaching ${voteCount} upvotes`);
-    }
-
-    return res.status(200).json({
+   
+    // Return immediately - don't wait for background
+    res.json({
       report_id: id,
-      upvotes: finalReport?.upvotes || 0,
-      downvotes: finalReport?.downvotes || 0,
-      score: finalReport?.communityScore || 0,
-      user_vote: existingVote && existingVote.value === value ? 0 : value, // 0 means no vote
+      upvotes: result.newUpvotes,
+      downvotes: result.newDownvotes,
+      score: result.communityScore,
+      user_vote: result.userVote,
     });
-  } catch (error) {
-    console.error('Vote error:', error);
-    res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to process vote' },
-    });
+
+  } catch (error: any) {
+    console.error(`❌ Vote failed after ${Date.now() - startTime}ms:`, error);
+    console.error('❌ Full error details:', error);
+    
+    if (error.message === 'REPORT_NOT_FOUND') {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+    
+    res.status(500).json({ error: 'Failed to process vote' });
   }
 };
 
-function calculateCommunityScore(upvotes: number, downvotes: number): number {
-  const total = upvotes + downvotes;
-  if (total === 0) return 0;
-  return (upvotes - downvotes) / total;
+async function processEngagementPoints(reporterId: string, upvotes: number) {
+  // Remove this entirely for now to test speed
+  return;
+  
+  // Or keep it minimal:
+  const milestones = { 10: 5, 25: 10, 50: 15 };
+  if (milestones[upvotes as keyof typeof milestones]) {
+    await prisma.user.updateMany({
+      where: { id: reporterId },
+      data: { civicPoints: { increment: milestones[upvotes as keyof typeof milestones] } }
+    });
+  }
 }

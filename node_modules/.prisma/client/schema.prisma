@@ -41,6 +41,33 @@ model User {
   @@map("users")
 }
 
+model Admin {
+  id             String  @id @default(uuid())
+  userId         String  @unique @map("user_id")
+  regionAssigned Json?   @map("region_assigned")
+  role           String  @default("viewer")
+  apiKey         String? @map("api_key")
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admins")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?  @map("actor_id")
+  actionType String   @map("action_type")
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  actor      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
 model Report {
   id              String    @id @default(uuid())
   reporterId      String?   @map("reporter_id")
@@ -124,23 +151,6 @@ model Reward {
   @@map("rewards")
 }
 
-model Notification {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
-  type      String
-  title     String
-  message   String
-  data      Json?
-  isRead    Boolean  @default(false) @map("is_read")
-  createdAt DateTime @default(now()) @map("created_at")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([isRead])
-  @@index([createdAt])
-  @@map("notifications")
-}
-
 model Redemption {
   id          String   @id @default(uuid())
   userId      String   @map("user_id")
@@ -157,29 +167,19 @@ model Redemption {
   @@map("redemptions")
 }
 
-model Admin {
-  id             String  @id @default(uuid())
-  userId         String  @unique @map("user_id")
-  regionAssigned Json?   @map("region_assigned")
-  role           String  @default("viewer")
-  apiKey         String? @map("api_key")
-  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  message   String
+  data      Json?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("admins")
-}
-
-model AuditLog {
-  id         String   @id @default(uuid())
-  actorId    String?  @map("actor_id")
-  actionType String   @map("action_type")
-  targetType String   @map("target_type")
-  targetId   String   @map("target_id")
-  details    Json?
-  createdAt  DateTime @default(now()) @map("created_at")
-  actor      User?    @relation(fields: [actorId], references: [id])
-
-  @@index([actorId])
-  @@index([targetType, targetId])
+  @@index([userId])
+  @@index([isRead])
   @@index([createdAt])
-  @@map("audit_logs")
+  @@map("notifications")
 }

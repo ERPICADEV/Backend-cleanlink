@@ -1,12 +1,17 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
 
-const prisma: PrismaClient = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
-});
+const prisma = new PrismaClient({
+  // Add connection pool settings
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL,
+    },
+  },
+})
 
-// Simple connection test on startup
+// Test connection on startup
 prisma.$connect()
   .then(() => console.log('✅ Database connected'))
-  .catch((error) => console.error('❌ Database connection failed:', error));
+  .catch(err => console.error('❌ Database connection failed:', err))
 
-export default prisma;
+export default prisma

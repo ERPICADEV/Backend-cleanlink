@@ -48,13 +48,19 @@ export const getReports = async (req: Request, res: Response) => {
         default: // 'new'
           orderBy.createdAt = 'desc';
       }
-  
+  // Define selectFields for getReports
+      const selectFields = {
+        reporterId: true,
+        reporterDisplay: true,
+      };
+
       const reports = await prisma.report.findMany({
         where,
         orderBy,
         take: parseInt(limit as string) + 1,
         cursor: cursor ? { id: cursor as string } : undefined,
         select: {
+          ...selectFields,
           id: true,
           title: true,
           description: true,
@@ -179,6 +185,27 @@ export const getReport = async (req: Request, res: Response) => {
       where: { userId: req.userId },
     }) : false;
     
+    const { fields } = req.query;
+    
+    const selectFields = fields ? 
+      JSON.parse(fields as string).reduce((acc: any, field: string) => {
+        acc[field] = true;
+        return acc;
+      }, {}) 
+      : {
+        id: true,
+        title: true,
+        upvotes: true,
+        downvotes: true,
+        status: true,
+        category: true,
+        createdAt: true,
+        comments_count: true,
+        // Remove heavy fields
+        // description: true, // Only if needed
+        // images: true,      // Only if needed  
+      };
+
     const report = await withRetry(() =>
       prisma.report.findUnique({
         where: { id },

@@ -12,14 +12,13 @@ export const enqueueAIAnalysis = async (reportId: string) => {
 
 export const processAIQueue = async () => {
   try {
-    console.log('🔄 Checking AI queue...');
     const reportId = await redis.rpop('ai_processing_queue');
     if (reportId) {
       console.log(`🎯 Processing queued report: ${reportId}`);
       const { processReportWithAI } = await import('../workers/aiWorker');
       await processReportWithAI(reportId);
     } else {
-      console.log('📭 AI queue is empty');
+      
     }
   } catch (error) {
     console.error('❌ AI queue processing error:', error);
