@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateRegion = exports.getRegions = exports.getPublicProfile = exports.updateMe = exports.getMe = void 0;
+exports.updateRegion = exports.getRegions = exports.getMyComments = exports.getPublicProfile = exports.updateMe = exports.getMe = void 0;
 const sqlite_1 = __importDefault(require("../config/sqlite"));
 const levelConfig_1 = require("../utils/levelConfig");
 // GET /api/v1/users/me
@@ -169,6 +169,56 @@ const getPublicProfile = async (req, res) => {
     }
 };
 exports.getPublicProfile = getPublicProfile;
+// GET /api/v1/users/me/comments
+const getMyComments = async (req, res) => {
+    try {
+        const { limit = 20, offset = 0 } = req.query;
+        const userId = req.userId;
+        // Get comments by user
+        const commentsStmt = sqlite_1.default.prepare(`
+      SELECT c.*, u.username, u.badges, r.id as report_id, r.title as report_title
+      FROM comments c 
+      LEFT JOIN users u ON c.author_id = u.id 
+      LEFT JOIN reports r ON c.report_id = r.id
+      WHERE c.author_id = ?
+      ORDER BY c.created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+        const comments = commentsStmt.all(userId, parseInt(limit), parseInt(offset));
+        // Format comments
+        const formattedComments = comments.map((comment) => ({
+            id: comment.id,
+            text: comment.text,
+            reportId: comment.report_id,
+            reportTitle: comment.report_title,
+            author: {
+                id: comment.author_id,
+                username: comment.username || 'Anonymous',
+                badges: comment.badges ? JSON.parse(comment.badges) : [],
+            },
+            parent_comment_id: comment.parent_comment_id,
+            created_at: comment.created_at,
+            updated_at: comment.updated_at,
+        }));
+        // Get total count
+        const countStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM comments WHERE author_id = ?');
+        const countResult = countStmt.get(userId);
+        const total = countResult.count;
+        return res.status(200).json({
+            data: formattedComments,
+            total,
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+        });
+    }
+    catch (error) {
+        console.error('Get my comments error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch comments' },
+        });
+    }
+};
+exports.getMyComments = getMyComments;
 // GET /api/v1/regions
 const getRegions = async (req, res) => {
     try {

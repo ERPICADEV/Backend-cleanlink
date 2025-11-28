@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import db from '../config/sqlite';
 import { randomUUID } from 'crypto';
+import { NotificationService } from '../services/notificationService';
 
 // POST /api/v1/reports/:id/comments
 export const createComment = async (req: Request, res: Response) => {
@@ -19,8 +20,8 @@ export const createComment = async (req: Request, res: Response) => {
       });
     }
 
-    // Check if report exists
-    const reportStmt = db.prepare('SELECT id FROM reports WHERE id = ?');
+    // Check if report exists and get owner
+    const reportStmt = db.prepare('SELECT id, reporter_id, title FROM reports WHERE id = ?');
     const report: any = reportStmt.get(reportId);
 
     if (!report) {
@@ -81,6 +82,21 @@ export const createComment = async (req: Request, res: Response) => {
       WHERE c.id = ?
     `);
     const comment: any = commentStmt.get(commentId);
+
+    // Fire-and-forget notification to report owner (if not self-comment)
+    if (report.reporter_id && report.reporter_id !== req.userId) {
+      const snippet =
+        comment.text && comment.text.length > 80
+          ? `${comment.text.slice(0, 77)}...`
+          : comment.text;
+
+      NotificationService.notifyNewComment(
+        report.reporter_id,
+        reportId,
+        comment.username,
+        snippet
+      );
+    }
 
     return res.status(201).json({
       id: comment.id,

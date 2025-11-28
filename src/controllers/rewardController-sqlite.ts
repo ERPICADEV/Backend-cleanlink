@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import db from '../config/sqlite';
 import { randomUUID } from 'crypto';
+import { NotificationService } from '../services/notificationService';
 
 // GET /api/v1/rewards - Public
 export const getRewards = async (req: Request, res: Response) => {
@@ -165,7 +166,15 @@ export const redeemReward = async (req: Request, res: Response) => {
           createdAt
         );
       })();
-  
+ 
+      // Fire-and-forget notification to user about reward redemption
+      NotificationService.notifyRewardRedeemed(
+        req.userId!,
+        id,
+        reward.title,
+        reward.required_points
+      );
+
       return res.status(201).json({
         id: redemptionId,
         reward: {

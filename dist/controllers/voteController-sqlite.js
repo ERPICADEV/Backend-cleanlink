@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.voteReport = void 0;
 const sqlite_1 = __importDefault(require("../config/sqlite"));
 const crypto_1 = require("crypto");
+const notificationService_1 = require("../services/notificationService");
 const voteReport = async (req, res) => {
     const startTime = Date.now();
     try {
@@ -18,20 +19,23 @@ const voteReport = async (req, res) => {
         }
         console.log('🔍 Starting SQLite vote...');
         // Prepare statements with proper typing
-        const getReportStmt = sqlite_1.default.prepare('SELECT upvotes, downvotes FROM reports WHERE id = ?');
+        const getReportStmt = sqlite_1.default.prepare('SELECT upvotes, downvotes, reporter_id FROM reports WHERE id = ?');
         const getVoteStmt = sqlite_1.default.prepare('SELECT value FROM votes WHERE report_id = ? AND user_id = ?');
         const deleteVoteStmt = sqlite_1.default.prepare('DELETE FROM votes WHERE report_id = ? AND user_id = ?');
         const updateVoteStmt = sqlite_1.default.prepare('UPDATE votes SET value = ? WHERE report_id = ? AND user_id = ?');
         const insertVoteStmt = sqlite_1.default.prepare('INSERT INTO votes (id, report_id, user_id, value) VALUES (?, ?, ?, ?)');
         const updateReportStmt = sqlite_1.default.prepare('UPDATE reports SET upvotes = ?, downvotes = ?, community_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
         // Transaction for atomic operations
+        let reportOwnerId = null;
+        let finalUserVote = voteValue;
         sqlite_1.default.transaction(() => {
             // 1. Get report with type assertion
             const report = getReportStmt.get(id);
             if (!report) {
                 throw new Error('REPORT_NOT_FOUND');
             }
-            const { upvotes, downvotes } = report;
+            const { upvotes, downvotes, reporter_id } = report;
+            reportOwnerId = reporter_id || null;
             // 2. Check existing vote with type assertion
             const existingVote = getVoteStmt.get(id, userId);
             let userVote = voteValue;
@@ -64,6 +68,7 @@ const voteReport = async (req, res) => {
             updateReportStmt.run(newUpvotes, newDownvotes, communityScore, id);
             const processingTime = Date.now() - startTime;
             console.log(`⚡ SQLite vote processed in ${processingTime}ms`);
+            finalUserVote = userVote;
             res.json({
                 report_id: id,
                 upvotes: newUpvotes,
@@ -73,6 +78,10 @@ const voteReport = async (req, res) => {
                 processing_time: processingTime
             });
         })();
+        // Send notification outside of transaction (fire-and-forget)
+        if (reportOwnerId && reportOwnerId !== userId && finalUserVote !== 0) {
+            notificationService_1.NotificationService.notifyVote(reportOwnerId, id, finalUserVote);
+        }
     }
     catch (error) {
         console.error(`❌ Vote failed after ${Date.now() - startTime}ms:`, error);

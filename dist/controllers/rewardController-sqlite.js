@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteReward = exports.updateReward = exports.createReward = exports.redeemReward = exports.getRewards = void 0;
 const sqlite_1 = __importDefault(require("../config/sqlite"));
 const crypto_1 = require("crypto");
+const notificationService_1 = require("../services/notificationService");
 // GET /api/v1/rewards - Public
 const getRewards = async (req, res) => {
     try {
@@ -136,6 +137,8 @@ const redeemReward = async (req, res) => {
         `);
             insertAuditStmt.run(auditLogId, req.userId, 'REWARD_REDEEMED', 'REDEMPTION', redemptionId, JSON.stringify(auditDetails), createdAt);
         })();
+        // Fire-and-forget notification to user about reward redemption
+        notificationService_1.NotificationService.notifyRewardRedeemed(req.userId, id, reward.title, reward.required_points);
         return res.status(201).json({
             id: redemptionId,
             reward: {

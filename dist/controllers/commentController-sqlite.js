@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteComment = exports.updateComment = exports.getComments = exports.createComment = void 0;
 const sqlite_1 = __importDefault(require("../config/sqlite"));
 const crypto_1 = require("crypto");
+const notificationService_1 = require("../services/notificationService");
 // POST /api/v1/reports/:id/comments
 const createComment = async (req, res) => {
     try {
@@ -21,8 +22,8 @@ const createComment = async (req, res) => {
                 },
             });
         }
-        // Check if report exists
-        const reportStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
+        // Check if report exists and get owner
+        const reportStmt = sqlite_1.default.prepare('SELECT id, reporter_id, title FROM reports WHERE id = ?');
         const report = reportStmt.get(reportId);
         if (!report) {
             return res.status(404).json({
@@ -69,6 +70,13 @@ const createComment = async (req, res) => {
       WHERE c.id = ?
     `);
         const comment = commentStmt.get(commentId);
+        // Fire-and-forget notification to report owner (if not self-comment)
+        if (report.reporter_id && report.reporter_id !== req.userId) {
+            const snippet = comment.text && comment.text.length > 80
+                ? `${comment.text.slice(0, 77)}...`
+                : comment.text;
+            notificationService_1.NotificationService.notifyNewComment(report.reporter_id, reportId, comment.username, snippet);
+        }
         return res.status(201).json({
             id: comment.id,
             text: comment.text,

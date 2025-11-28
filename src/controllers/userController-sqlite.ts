@@ -181,6 +181,59 @@ export const getPublicProfile = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/users/me/comments
+export const getMyComments = async (req: Request, res: Response) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+    const userId = req.userId!;
+
+    // Get comments by user
+    const commentsStmt = db.prepare(`
+      SELECT c.*, u.username, u.badges, r.id as report_id, r.title as report_title
+      FROM comments c 
+      LEFT JOIN users u ON c.author_id = u.id 
+      LEFT JOIN reports r ON c.report_id = r.id
+      WHERE c.author_id = ?
+      ORDER BY c.created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    const comments = commentsStmt.all(userId, parseInt(limit as string), parseInt(offset as string)) as any[];
+
+    // Format comments
+    const formattedComments = comments.map((comment: any) => ({
+      id: comment.id,
+      text: comment.text,
+      reportId: comment.report_id,
+      reportTitle: comment.report_title,
+      author: {
+        id: comment.author_id,
+        username: comment.username || 'Anonymous',
+        badges: comment.badges ? JSON.parse(comment.badges) : [],
+      },
+      parent_comment_id: comment.parent_comment_id,
+      created_at: comment.created_at,
+      updated_at: comment.updated_at,
+    }));
+
+    // Get total count
+    const countStmt = db.prepare('SELECT COUNT(*) as count FROM comments WHERE author_id = ?');
+    const countResult: any = countStmt.get(userId);
+    const total = countResult.count;
+
+    return res.status(200).json({
+      data: formattedComments,
+      total,
+      limit: parseInt(limit as string),
+      offset: parseInt(offset as string),
+    });
+  } catch (error) {
+    console.error('Get my comments error:', error);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch comments' },
+    });
+  }
+};
+
 // GET /api/v1/regions
 export const getRegions = async (req: Request, res: Response) => {
   try {

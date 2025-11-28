@@ -203,7 +203,43 @@ export const getReport = async (req: Request, res: Response) => {
       WHERE c.report_id = ? 
       ORDER BY c.created_at ASC
     `);
-    const comments = commentsStmt.all(id);
+    const rawComments = commentsStmt.all(id) as any[];
+
+    // Format comments to match getComments endpoint structure
+    const formatComment = (comment: any): any => {
+      const formatted: any = {
+        id: comment.id,
+        text: comment.text,
+        author: {
+          id: comment.author_id,
+          username: comment.username || 'Anonymous',
+          badges: comment.badges ? JSON.parse(comment.badges) : [],
+        },
+        parent_comment_id: comment.parent_comment_id,
+        created_at: comment.created_at,
+        updated_at: comment.updated_at,
+      };
+
+      // Get replies recursively
+      const repliesStmt = db.prepare(`
+        SELECT c.*, u.username, u.badges 
+        FROM comments c 
+        LEFT JOIN users u ON c.author_id = u.id 
+        WHERE c.parent_comment_id = ?
+        ORDER BY c.created_at ASC
+      `);
+      const replies = repliesStmt.all(comment.id) as any[];
+      
+      if (replies.length > 0) {
+        formatted.replies = replies.map((reply: any) => formatComment(reply));
+      }
+
+      return formatted;
+    };
+
+    // Get top-level comments (no parent) and format them
+    const topLevelComments = rawComments.filter((c: any) => !c.parent_comment_id);
+    const comments = topLevelComments.map((comment: any) => formatComment(comment));
 
     // Get votes count
     const votesStmt = db.prepare('SELECT COUNT(*) as count FROM votes WHERE report_id = ?');

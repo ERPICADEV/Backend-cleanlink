@@ -7,6 +7,7 @@ const router = (0, express_1.Router)();
 // SQLite endpoints
 router.get('/me', auth_1.authMiddleware, userController_sqlite_1.getMe);
 router.patch('/me', auth_1.authMiddleware, userController_sqlite_1.updateMe);
+router.get('/me/comments', auth_1.authMiddleware, userController_sqlite_1.getMyComments);
 router.get('/:id/public', userController_sqlite_1.getPublicProfile);
 router.get('/regions', userController_sqlite_1.getRegions);
 router.patch('/me/region', auth_1.authMiddleware, userController_sqlite_1.updateRegion);
