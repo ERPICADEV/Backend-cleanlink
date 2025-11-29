@@ -20,7 +20,7 @@ export const adminMiddleware = async (req: Request, res: Response, next: NextFun
       })
     }
 
-    const stmt = db.prepare('SELECT * FROM admins WHERE userId = ?')
+    const stmt = db.prepare('SELECT * FROM admins WHERE user_id = ?')
     const admin = stmt.get(req.userId!) as any
 
     if (!admin) {
@@ -31,7 +31,7 @@ export const adminMiddleware = async (req: Request, res: Response, next: NextFun
 
     req.isAdmin = true
     req.adminRole = admin.role
-    req.adminRegion = admin.regionAssigned
+    req.adminRegion = admin.region_assigned
     
     next()
   } catch (error) {
@@ -58,7 +58,7 @@ export const reporterOrAdminMiddleware = async (req: Request, res: Response, nex
     // Check if user is reporter or admin
     const isReporter = report.reporterId === req.userId
     
-    const adminStmt = db.prepare('SELECT * FROM admins WHERE userId = ?')
+    const adminStmt = db.prepare('SELECT * FROM admins WHERE user_id = ?')
     const isAdmin = adminStmt.get(req.userId!)! as any
 
     if (!isReporter && !isAdmin) {

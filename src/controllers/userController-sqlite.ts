@@ -6,8 +6,22 @@ import { LEVEL_CONFIG, calculateLevelProgress } from '../utils/levelConfig';
 export const getMe = async (req: Request, res: Response) => {
   try {
     const userStmt = db.prepare(`
-      SELECT id, username, email, region, civic_points, civic_level, badges, bio, avatar_url, trust_score
-      FROM users WHERE id = ?
+      SELECT 
+        u.id,
+        u.username,
+        u.email,
+        u.region,
+        u.civic_points,
+        u.civic_level,
+        u.badges,
+        u.bio,
+        u.avatar_url,
+        u.trust_score,
+        a.role as admin_role,
+        a.region_assigned as admin_region
+      FROM users u
+      LEFT JOIN admins a ON a.user_id = u.id
+      WHERE u.id = ?
     `);
     const user: any = userStmt.get(req.userId);
 
@@ -25,7 +39,10 @@ export const getMe = async (req: Request, res: Response) => {
       civicPoints: user.civic_points,
       civicLevel: user.civic_level,
       avatarUrl: user.avatar_url,
-      trustScore: user.trust_score
+      trustScore: user.trust_score,
+      role: user.admin_role ? (user.admin_role === 'super_admin' ? 'super_admin' : 'admin') : 'user',
+      adminRegion: user.admin_region || null,
+      permissions: user.admin_role ? ['admin:access'] : [],
     };
 
     // Calculate level progress
