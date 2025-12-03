@@ -22,8 +22,13 @@ export const processReportWithAI = async (reportId: string) => {
     console.log(`Processing report ${reportId} with AI...`)
     
     if (!apiKey) {
-      console.error('❌ Cannot process AI - API key missing')
+      console.error('❌ Cannot process AI - OPENROUTER_API_KEY is missing from .env file')
+      console.error('   Please add OPENROUTER_API_KEY=your_key_here to your .env file')
       return
+    }
+    
+    if (!apiKey.startsWith('sk-or-v1-')) {
+      console.warn('⚠️  Warning: OPENROUTER_API_KEY format may be incorrect (should start with "sk-or-v1-")')
     }
 
     // Use retry for database queries
@@ -72,6 +77,14 @@ export const processReportWithAI = async (reportId: string) => {
 
     console.log('🤖 Calling AI service...')
     const aiResult = await aiService.analyzeReport(reportData)
+    
+    // Only save AI analysis if it was successful
+    if (!aiResult.success) {
+      console.error(`❌ AI analysis failed for report ${reportId} - NOT saving fake data to database`)
+      console.error('   Fix your OPENROUTER_API_KEY to get real AI analysis')
+      return
+    }
+    
     console.log('✅ AI analysis result:', aiResult)
 
     // Update report with AI results using retry
@@ -79,9 +92,9 @@ export const processReportWithAI = async (reportId: string) => {
       const stmt = db.prepare(`
         UPDATE reports 
         SET 
-          aiScore = ?,
+          ai_score = ?,
           status = ?,
-          updatedAt = ?
+          updated_at = ?
         WHERE id = ?
       `)
       

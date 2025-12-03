@@ -47,7 +47,7 @@ db.exec(`
     upvotes INTEGER DEFAULT 0,
     downvotes INTEGER DEFAULT 0,
     community_score REAL DEFAULT 0,
-    status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending',  -- 'pending' | 'assigned' | 'in_progress' | 'pending_approval' | 'resolved' | 'flagged' | 'duplicate' | 'invalid'
     mcd_verified_by TEXT,
     mcd_resolution TEXT,
     duplicate_of TEXT,
@@ -140,14 +140,37 @@ db.exec(`
     FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
   );
 
-  -- Admins table
+  -- ✨ UPDATED: Admins table with role hierarchy
   CREATE TABLE IF NOT EXISTS admins (
     id TEXT PRIMARY KEY,
     user_id TEXT UNIQUE,
     region_assigned TEXT,
-    role TEXT DEFAULT 'viewer',
-    api_key TEXT,
+    role TEXT DEFAULT 'admin',  -- 'superadmin' | 'admin' | 'viewer'
+    status TEXT DEFAULT 'active',  -- 'active' | 'inactive' | 'suspended'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- ✨ NEW: Report Progress Tracking Table
+  CREATE TABLE IF NOT EXISTS report_progress (
+    id TEXT PRIMARY KEY,
+    report_id TEXT NOT NULL,
+    admin_id TEXT NOT NULL,
+    progress_status TEXT DEFAULT 'not_started',  -- 'not_started' | 'in_progress' | 'submitted_for_approval'
+    notes TEXT,
+    photos TEXT DEFAULT '[]',  -- JSON array of photo URLs
+    completion_details TEXT,
+    submitted_at DATETIME,
+    approved_at DATETIME,
+    approved_by TEXT,
+    rejection_reason TEXT,
+    rejected_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE,
+    FOREIGN KEY (approved_by) REFERENCES admins(id) ON DELETE SET NULL
   );
 
   -- Indexes
@@ -158,6 +181,31 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_comments_report ON comments(report_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+  
+  -- ✨ NEW: Report Progress Indexes
+  CREATE INDEX IF NOT EXISTS idx_report_progress_report_id ON report_progress(report_id);
+  CREATE INDEX IF NOT EXISTS idx_report_progress_admin_id ON report_progress(admin_id);
+  CREATE INDEX IF NOT EXISTS idx_report_progress_status ON report_progress(progress_status);
 `);
 console.log('✅ SQLite database initialized (WAL mode enabled)');
+console.log('✅ Admin roles system tables created');
+console.log('✅ Report progress tracking table created');
+// 🔧 Migration: Update existing admin to SuperAdmin role
+try {
+    const updateAdminStmt = db.prepare(`
+    UPDATE admins 
+    SET role = 'superadmin', status = 'active'
+    WHERE user_id = ?
+  `);
+    const result = updateAdminStmt.run('60db0ccd-b7c9-4377-a386-33ace2bae63f');
+    if (result.changes > 0) {
+        console.log('✅ Upgraded sajidkaish9@gmail.com to SuperAdmin role');
+    }
+    else {
+        console.log('⚠️  Admin record not found - you may need to create it manually');
+    }
+}
+catch (error) {
+    console.log('⚠️  Could not upgrade admin role (table might be empty)');
+}
 exports.default = db;

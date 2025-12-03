@@ -34,16 +34,38 @@ class AIService {
                 }
             });
             const aiResponse = response.data.choices[0].message.content;
-            return this.parseAIResponse(aiResponse);
+            const result = this.parseAIResponse(aiResponse);
+            return { ...result, success: true };
         }
         catch (error) {
-            console.error('AI Service error:', error);
-            // Return default values if AI fails
+            // Better error handling
+            if (error.response) {
+                const status = error.response.status;
+                const statusText = error.response.statusText;
+                if (status === 401) {
+                    console.error('❌ AI Service: Unauthorized (401) - Check your OPENROUTER_API_KEY in .env file');
+                    console.error('   The API key may be invalid, expired, or missing');
+                }
+                else if (status === 429) {
+                    console.error('❌ AI Service: Rate limit exceeded (429) - Too many requests');
+                }
+                else {
+                    console.error(`❌ AI Service error: ${status} ${statusText}`);
+                }
+            }
+            else if (error.request) {
+                console.error('❌ AI Service: No response from OpenRouter API - Check your internet connection');
+            }
+            else {
+                console.error('❌ AI Service error:', error.message);
+            }
+            // Return failure indicator - DO NOT save fake data to database
             return {
                 legit: 0.5,
                 severity: 0.5,
                 duplicate_prob: 0,
-                insights: ['ai_service_unavailable']
+                insights: ['ai_service_unavailable'],
+                success: false
             };
         }
     }
@@ -78,7 +100,8 @@ Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["ge
             // Extract JSON from response
             const jsonMatch = response.match(/\{.*\}/);
             if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
+                const parsed = JSON.parse(jsonMatch[0]);
+                return { ...parsed, success: true };
             }
         }
         catch (error) {
@@ -89,7 +112,8 @@ Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["ge
             legit: 0.5,
             severity: 0.5,
             duplicate_prob: 0,
-            insights: ['response_parse_failed']
+            insights: ['response_parse_failed'],
+            success: false
         };
     }
 }

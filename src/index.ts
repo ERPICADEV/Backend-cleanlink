@@ -3,7 +3,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import redis from './config/redis';
-
+import { authMiddleware } from './middleware/auth';
+import { adminMiddleware } from './middleware/adminRoles';
+import { getRolePermissions } from './lib/permissions';
 // Import SQLite routes
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
@@ -80,6 +82,36 @@ app.get('/sqlite-reports', (req, res) => {
     res.status(500).json({ error: error.message })
   }
 })
+
+
+// Test endpoint - add after other routes
+app.get('/test-permissions', authMiddleware, adminMiddleware, (req, res) => {
+  res.json({
+    userId: req.userId,
+    adminId: req.adminId,
+    role: req.adminRole,
+    isSuperAdmin: req.isSuperAdmin,
+    permissions: getRolePermissions(req.adminRole!)
+  });
+});
+
+
+// Debug endpoint to see all admins
+app.get('/debug/admins', authMiddleware, adminMiddleware, (req, res) => {
+  const stmt = db.prepare(`
+    SELECT 
+      a.id as admin_id,
+      a.user_id,
+      a.role,
+      a.status,
+      u.email,
+      u.username
+    FROM admins a
+    JOIN users u ON a.user_id = u.id
+  `);
+  const admins = stmt.all();
+  res.json(admins);
+});
 
 app.get('/sqlite-reports/:id', (req, res) => {
   try {

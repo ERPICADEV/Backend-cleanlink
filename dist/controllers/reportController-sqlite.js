@@ -40,7 +40,7 @@ const getReports = async (req, res) => {
       SELECT 
         id, title, description, category, images, location, visibility,
         upvotes, downvotes, community_score, status, created_at, 
-        reporter_id, reporter_display,
+        reporter_id, reporter_display, ai_score,
         (SELECT COUNT(*) FROM comments WHERE report_id = reports.id) as comments_count
       FROM reports 
       ${whereClause}
@@ -65,10 +65,26 @@ const getReports = async (req, res) => {
                     reportData.location = restLocation;
                 }
             }
-            return {
+            // Parse ai_score and convert to camelCase
+            let aiScore = null;
+            try {
+                if (reportData.ai_score) {
+                    aiScore = JSON.parse(reportData.ai_score);
+                }
+            }
+            catch (e) {
+                console.error('Error parsing ai_score:', e);
+            }
+            const result = {
                 ...reportData,
+                aiScore, // Convert snake_case to camelCase for frontend
+                createdAt: reportData.created_at, // Convert snake_case to camelCase
                 description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : '')
             };
+            // Remove the snake_case versions from response
+            delete result.ai_score;
+            delete result.created_at;
+            return result;
         });
         return res.status(200).json({
             data: maskedReports,
@@ -198,16 +214,32 @@ const getReport = async (req, res) => {
         const votesStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM votes WHERE report_id = ?');
         const votesCount = votesStmt.get(id);
         // Parse JSON fields
+        let aiScore = null;
+        try {
+            if (report.ai_score) {
+                aiScore = JSON.parse(report.ai_score);
+            }
+        }
+        catch (e) {
+            console.error('Error parsing ai_score:', e);
+        }
         const responseReport = {
             ...report,
             images: report.images ? JSON.parse(report.images) : [],
             location: report.location ? JSON.parse(report.location) : {},
+            aiScore, // Convert snake_case to camelCase for frontend
+            createdAt: report.created_at, // Convert snake_case to camelCase
+            updatedAt: report.updated_at, // Convert snake_case to camelCase
             reporter,
             comments,
             _count: {
                 votes: votesCount.count
             }
         };
+        // Remove the snake_case versions from response
+        delete responseReport.ai_score;
+        delete responseReport.created_at;
+        delete responseReport.updated_at;
         // Mask coordinates for non-admin users
         if (!isAdmin && report.visibility === 'masked' && responseReport.location) {
             const { lat, lng, ...restLocation } = responseReport.location;

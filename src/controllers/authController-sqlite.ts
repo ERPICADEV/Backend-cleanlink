@@ -3,6 +3,7 @@ import db from '../config/sqlite';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwt';
 import { randomUUID } from 'crypto';
+import { AdminRole, getRolePermissions } from '../lib/permissions';
 
 // POST /api/v1/auth/signup
 export const signup = async (req: Request, res: Response) => {
@@ -183,6 +184,10 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
+    // Check if user is an admin and get admin role
+    const adminStmt = db.prepare('SELECT role, status, region_assigned FROM admins WHERE user_id = ?');
+    const adminInfo: any = adminStmt.get(user.id);
+
     const accessToken = generateAccessToken(user.id, user.email || undefined);
     const refreshToken = generateRefreshToken(user.id);
 
@@ -193,6 +198,10 @@ export const login = async (req: Request, res: Response) => {
         email: user.email,
         region: user.region ? JSON.parse(user.region) : null,
         civicPoints: user.civic_points,
+        // Include admin role information if user is an admin
+        role: adminInfo?.role || 'user',
+        adminRegion: adminInfo?.region_assigned || null,
+        permissions: adminInfo?.role ? getRolePermissions(adminInfo.role as AdminRole) : [],
       },
       token: accessToken,
       refresh_token: refreshToken,

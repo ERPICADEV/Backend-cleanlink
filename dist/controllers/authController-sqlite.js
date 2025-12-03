@@ -41,6 +41,7 @@ const sqlite_1 = __importDefault(require("../config/sqlite"));
 const password_1 = require("../utils/password");
 const jwt_1 = require("../utils/jwt");
 const crypto_1 = require("crypto");
+const permissions_1 = require("../lib/permissions");
 // POST /api/v1/auth/signup
 const signup = async (req, res) => {
     try {
@@ -195,6 +196,9 @@ const login = async (req, res) => {
                 },
             });
         }
+        // Check if user is an admin and get admin role
+        const adminStmt = sqlite_1.default.prepare('SELECT role, status, region_assigned FROM admins WHERE user_id = ?');
+        const adminInfo = adminStmt.get(user.id);
         const accessToken = (0, jwt_1.generateAccessToken)(user.id, user.email || undefined);
         const refreshToken = (0, jwt_1.generateRefreshToken)(user.id);
         return res.status(200).json({
@@ -204,6 +208,10 @@ const login = async (req, res) => {
                 email: user.email,
                 region: user.region ? JSON.parse(user.region) : null,
                 civicPoints: user.civic_points,
+                // Include admin role information if user is an admin
+                role: adminInfo?.role || 'user',
+                adminRegion: adminInfo?.region_assigned || null,
+                permissions: adminInfo?.role ? (0, permissions_1.getRolePermissions)(adminInfo.role) : [],
             },
             token: accessToken,
             refresh_token: refreshToken,
