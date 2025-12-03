@@ -292,6 +292,31 @@ export const getReport = async (req: Request, res: Response) => {
     delete responseReport.created_at;
     delete responseReport.updated_at;
 
+    // If the report has been worked on by admins, expose the latest
+    // resolution photos/details so they can be shown in the public feed.
+    const resolutionStmt = db.prepare(`
+      SELECT photos, completion_details, submitted_at
+      FROM report_progress
+      WHERE report_id = ?
+      ORDER BY submitted_at DESC
+      LIMIT 1
+    `);
+    const latestProgress = resolutionStmt.get(id) as any | undefined;
+
+    if (latestProgress) {
+      let resolutionPhotos: string[] = [];
+      try {
+        if (latestProgress.photos) {
+          resolutionPhotos = JSON.parse(latestProgress.photos);
+        }
+      } catch (e) {
+        console.error('Error parsing resolution photos:', e);
+      }
+
+      responseReport.resolutionPhotos = resolutionPhotos;
+      responseReport.resolutionDetails = latestProgress.completion_details || null;
+    }
+
     // Mask coordinates for non-admin users
     if (!isAdmin && report.visibility === 'masked' && responseReport.location) {
       const { lat, lng, ...restLocation } = responseReport.location;
