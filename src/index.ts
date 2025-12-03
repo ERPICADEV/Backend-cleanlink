@@ -43,6 +43,25 @@ app.use('/internal/ai', aiRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/map', mapRoutes);
 
+// Base API index to prevent "Cannot GET /api/v1"
+app.get('/api/v1', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'cleanlink-api',
+    version: 'v1',
+    routes: [
+      '/api/v1/auth',
+      '/api/v1/users',
+      '/api/v1/reports',
+      '/api/v1/admin',
+      '/api/v1/rewards',
+      '/api/v1/notifications',
+      '/api/v1/map'
+    ],
+    docs: 'Refer to README or swagger docs (if enabled)'
+  });
+});
+
 // Health check (SQLite only)
 app.get('/health', async (req, res) => {
   try {

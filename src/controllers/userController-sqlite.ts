@@ -32,6 +32,20 @@ export const getMe = async (req: Request, res: Response) => {
     }
 
     // Parse JSON fields
+    const mapAdminRole = (role?: string | null) => {
+      if (!role) return 'user';
+      const normalized = role.toLowerCase();
+      if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
+        return 'super_admin';
+      }
+      if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
+        return 'field_admin';
+      }
+      return 'user';
+    };
+
+    const normalizedRole = mapAdminRole(user.admin_role);
+
     const userData = {
       ...user,
       region: user.region ? JSON.parse(user.region) : null,
@@ -40,9 +54,9 @@ export const getMe = async (req: Request, res: Response) => {
       civicLevel: user.civic_level,
       avatarUrl: user.avatar_url,
       trustScore: user.trust_score,
-      role: user.admin_role ? (user.admin_role === 'super_admin' ? 'super_admin' : 'admin') : 'user',
+      role: normalizedRole,
       adminRegion: user.admin_region || null,
-      permissions: user.admin_role ? ['admin:access'] : [],
+      permissions: normalizedRole === 'user' ? [] : ['admin:access'],
     };
 
     // Calculate level progress

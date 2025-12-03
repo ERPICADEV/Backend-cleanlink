@@ -6,6 +6,18 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateRegion = exports.getRegions = exports.getMyComments = exports.getPublicProfile = exports.updateMe = exports.getMe = void 0;
 const sqlite_1 = __importDefault(require("../config/sqlite"));
 const levelConfig_1 = require("../utils/levelConfig");
+const mapAdminRole = (role) => {
+    if (!role)
+        return 'user';
+    const normalized = role.toLowerCase();
+    if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
+        return 'super_admin';
+    }
+    if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
+        return 'field_admin';
+    }
+    return 'user';
+};
 // GET /api/v1/users/me
 const getMe = async (req, res) => {
     try {
@@ -34,6 +46,7 @@ const getMe = async (req, res) => {
             });
         }
         // Parse JSON fields
+        const clientRole = mapAdminRole(user.admin_role);
         const userData = {
             ...user,
             region: user.region ? JSON.parse(user.region) : null,
@@ -42,9 +55,9 @@ const getMe = async (req, res) => {
             civicLevel: user.civic_level,
             avatarUrl: user.avatar_url,
             trustScore: user.trust_score,
-            role: user.admin_role ? (user.admin_role === 'super_admin' ? 'super_admin' : 'admin') : 'user',
+            role: clientRole,
             adminRegion: user.admin_region || null,
-            permissions: user.admin_role ? ['admin:access'] : [],
+            permissions: clientRole === 'user' ? [] : ['admin:access'],
         };
         // Calculate level progress
         const currentLevel = userData.civicLevel;

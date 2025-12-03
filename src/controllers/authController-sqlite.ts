@@ -147,6 +147,18 @@ export const signup = async (req: Request, res: Response) => {
 };
 
 // POST /api/v1/auth/login
+const mapAdminRole = (role?: string | null) => {
+  if (!role) return 'user';
+  const normalized = role.toLowerCase();
+  if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
+    return 'super_admin';
+  }
+  if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
+    return 'field_admin';
+  }
+  return 'user';
+};
+
 export const login = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -198,8 +210,7 @@ export const login = async (req: Request, res: Response) => {
         email: user.email,
         region: user.region ? JSON.parse(user.region) : null,
         civicPoints: user.civic_points,
-        // Include admin role information if user is an admin
-        role: adminInfo?.role || 'user',
+        role: mapAdminRole(adminInfo?.role),
         adminRegion: adminInfo?.region_assigned || null,
         permissions: adminInfo?.role ? getRolePermissions(adminInfo.role as AdminRole) : [],
       },

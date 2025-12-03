@@ -164,6 +164,18 @@ const signup = async (req, res) => {
     }
 };
 exports.signup = signup;
+const mapAdminRole = (role) => {
+    if (!role)
+        return 'user';
+    const normalized = role.toLowerCase();
+    if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
+        return 'super_admin';
+    }
+    if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
+        return 'field_admin';
+    }
+    return 'user';
+};
 // POST /api/v1/auth/login
 const login = async (req, res) => {
     try {
@@ -201,6 +213,7 @@ const login = async (req, res) => {
         const adminInfo = adminStmt.get(user.id);
         const accessToken = (0, jwt_1.generateAccessToken)(user.id, user.email || undefined);
         const refreshToken = (0, jwt_1.generateRefreshToken)(user.id);
+        const clientRole = mapAdminRole(adminInfo?.role);
         return res.status(200).json({
             user: {
                 id: user.id,
@@ -209,7 +222,7 @@ const login = async (req, res) => {
                 region: user.region ? JSON.parse(user.region) : null,
                 civicPoints: user.civic_points,
                 // Include admin role information if user is an admin
-                role: adminInfo?.role || 'user',
+                role: clientRole,
                 adminRegion: adminInfo?.region_assigned || null,
                 permissions: adminInfo?.role ? (0, permissions_1.getRolePermissions)(adminInfo.role) : [],
             },
