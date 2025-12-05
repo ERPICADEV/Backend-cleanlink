@@ -87,3 +87,48 @@ export const getUnreadCount = async (req: Request, res: Response) => {
     });
   }
 };
+
+// PATCH /api/v1/notifications/:id/read
+export const markAsRead = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        error: { code: 'BAD_REQUEST', message: 'Notification ID is required' },
+      });
+    }
+
+    // Verify notification exists and belongs to the user
+    const checkStmt = db.prepare('SELECT id, is_read FROM notifications WHERE id = ? AND user_id = ?');
+    const notification: any = checkStmt.get(id, req.userId);
+
+    if (!notification) {
+      return res.status(404).json({
+        error: { code: 'NOT_FOUND', message: 'Notification not found' },
+      });
+    }
+
+    // If already read, return success
+    if (notification.is_read) {
+      return res.status(200).json({
+        id: notification.id,
+        isRead: true,
+      });
+    }
+
+    // Mark as read
+    const updateStmt = db.prepare('UPDATE notifications SET is_read = true WHERE id = ? AND user_id = ?');
+    updateStmt.run(id, req.userId);
+
+    return res.status(200).json({
+      id: notification.id,
+      isRead: true,
+    });
+  } catch (error) {
+    console.error('Mark notification as read error:', error);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to mark notification as read' },
+    });
+  }
+};
