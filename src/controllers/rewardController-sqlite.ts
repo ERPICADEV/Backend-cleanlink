@@ -39,6 +39,37 @@ export const getRewards = async (req: Request, res: Response) => {
     });
   }
 };
+
+// GET /api/v1/rewards/admin/all - Admin only (all rewards including unavailable)
+export const getAllRewards = async (req: Request, res: Response) => {
+  try {
+    const rewardsStmt = db.prepare(`
+      SELECT * FROM rewards 
+      ORDER BY created_at DESC, required_points ASC
+    `);
+    
+    const rewards = rewardsStmt.all();
+
+    // Parse JSON fields
+    const formattedRewards = rewards.map((reward: any) => ({
+      ...reward,
+      metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+      requiredPoints: reward.required_points,
+      maxPerUser: reward.max_per_user,
+      availableFrom: reward.available_from,
+      availableUntil: reward.available_until
+    }));
+
+    return res.status(200).json({
+      data: formattedRewards,
+    });
+  } catch (error) {
+    console.error('Get all rewards error:', error);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch rewards' },
+    });
+  }
+};
 // POST /api/v1/rewards/:id/redeem - User
 export const redeemReward = async (req: Request, res: Response) => {
     try {

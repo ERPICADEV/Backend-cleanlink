@@ -61,9 +61,11 @@ export const createComment = async (req: Request, res: Response) => {
 
     // Create comment
     const commentId = randomUUID();
+    // Use UTC timestamp to avoid timezone issues
+    const now = new Date().toISOString();
     const insertStmt = db.prepare(`
       INSERT INTO comments (id, report_id, author_id, text, parent_comment_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     insertStmt.run(
@@ -71,7 +73,9 @@ export const createComment = async (req: Request, res: Response) => {
       reportId,
       req.userId!,
       text.trim(),
-      parent_comment_id || null
+      parent_comment_id || null,
+      now,
+      now
     );
 
     // Get created comment with author info
@@ -107,6 +111,9 @@ export const createComment = async (req: Request, res: Response) => {
         badges: comment.badges ? JSON.parse(comment.badges) : [],
       },
       parent_comment_id: comment.parent_comment_id,
+      upvotes: comment.upvotes || 0,
+      downvotes: comment.downvotes || 0,
+      user_vote: 0,
       created_at: comment.created_at,
       updated_at: comment.updated_at,
     });
@@ -123,6 +130,7 @@ export const getComments = async (req: Request, res: Response) => {
   try {
     const { id: reportId } = req.params;
     const { limit = 20, include_replies = 'true' } = req.query;
+    const userId = req.userId || null; // Optional user ID for vote status
 
     // Check if report exists
     const reportStmt = db.prepare('SELECT id FROM reports WHERE id = ?');
@@ -145,8 +153,20 @@ export const getComments = async (req: Request, res: Response) => {
     `);
     const comments = commentsStmt.all(reportId, parseInt(limit as string));
 
+    // Prepare vote lookup statement if user is authenticated
+    const getUserVoteStmt = userId 
+      ? db.prepare('SELECT value FROM comment_votes WHERE comment_id = ? AND user_id = ?')
+      : null;
+
     // Format comments
     const formatComment = (comment: any): any => {
+      // Get user's vote for this comment if authenticated
+      let userVote = 0;
+      if (userId && getUserVoteStmt) {
+        const voteResult: any = getUserVoteStmt.get(comment.id, userId);
+        userVote = voteResult?.value || 0;
+      }
+
       const formatted: any = {
         id: comment.id,
         text: comment.text,
@@ -156,6 +176,9 @@ export const getComments = async (req: Request, res: Response) => {
           badges: comment.badges ? JSON.parse(comment.badges) : [],
         },
         parent_comment_id: comment.parent_comment_id,
+        upvotes: comment.upvotes || 0,
+        downvotes: comment.downvotes || 0,
+        user_vote: userVote,
         created_at: comment.created_at,
         updated_at: comment.updated_at,
       };
@@ -233,6 +256,14 @@ export const updateComment = async (req: Request, res: Response) => {
       });
     }
 
+    // Get user's vote for this comment if authenticated
+    let userVote = 0;
+    if (req.userId) {
+      const voteStmt = db.prepare('SELECT value FROM comment_votes WHERE comment_id = ? AND user_id = ?');
+      const voteResult: any = voteStmt.get(id, req.userId);
+      userVote = voteResult?.value || 0;
+    }
+
     return res.status(200).json({
       id: updatedComment.id,
       text: updatedComment.text,
@@ -242,6 +273,9 @@ export const updateComment = async (req: Request, res: Response) => {
         badges: updatedComment.badges ? JSON.parse(updatedComment.badges) : [],
       },
       parent_comment_id: updatedComment.parent_comment_id,
+      upvotes: updatedComment.upvotes || 0,
+      downvotes: updatedComment.downvotes || 0,
+      user_vote: userVote,
       created_at: updatedComment.created_at,
       updated_at: updatedComment.updated_at,
     });

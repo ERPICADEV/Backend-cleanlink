@@ -62,22 +62,40 @@ export const voteReport = async (req: Request, res: Response) => {
       // 3. Handle vote logic
       if (existingVote) {
         if (existingVote.value === voteValue) {
-          // Remove vote
+          // User clicked the same vote button - toggle off (remove vote, set to 0)
           deleteVoteStmt.run(id, userId);
+          // Remove the vote from counts
+          if (voteValue === 1) {
+            newUpvotes = Math.max(0, upvotes - 1);
+            newDownvotes = downvotes;
+          } else {
+            newUpvotes = upvotes;
+            newDownvotes = Math.max(0, downvotes - 1);
+          }
           userVote = 0;
-          newUpvotes = voteValue === 1 ? upvotes - 1 : upvotes;
-          newDownvotes = voteValue === -1 ? downvotes - 1 : downvotes;
         } else {
           // Change vote
           updateVoteStmt.run(voteValue, id, userId);
-          newUpvotes = voteValue === 1 ? upvotes + 1 : upvotes - 1;
-          newDownvotes = voteValue === -1 ? downvotes + 1 : downvotes - 1;
+          // Remove old vote from counts
+          if (existingVote.value === 1) {
+            newUpvotes = Math.max(0, upvotes - 1);
+          } else {
+            newDownvotes = Math.max(0, downvotes - 1);
+          }
+          // Add new vote to counts
+          if (voteValue === 1) {
+            newUpvotes = newUpvotes + 1;
+          } else {
+            newDownvotes = newDownvotes + 1;
+          }
+          userVote = voteValue;
         }
       } else {
         // New vote
         insertVoteStmt.run(randomUUID(), id, userId, voteValue);
         newUpvotes = voteValue === 1 ? upvotes + 1 : upvotes;
         newDownvotes = voteValue === -1 ? downvotes + 1 : downvotes;
+        userVote = voteValue;
       }
 
       // 4. Calculate score and update report

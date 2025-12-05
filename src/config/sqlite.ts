@@ -92,11 +92,25 @@ db.exec(`
     author_id TEXT,
     text TEXT NOT NULL,
     parent_comment_id TEXT,
+    upvotes INTEGER DEFAULT 0,
+    downvotes INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
     FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (parent_comment_id) REFERENCES comments(id) ON DELETE CASCADE
+  );
+
+  -- Comment votes table
+  CREATE TABLE IF NOT EXISTS comment_votes (
+    id TEXT PRIMARY KEY,
+    comment_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(comment_id, user_id),
+    FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
   -- Rewards table
@@ -177,6 +191,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_votes_report_user ON votes(report_id, user_id);
   CREATE INDEX IF NOT EXISTS idx_comments_report ON comments(report_id);
+  CREATE INDEX IF NOT EXISTS idx_comment_votes_comment_user ON comment_votes(comment_id, user_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
   
@@ -189,6 +204,21 @@ db.exec(`
 console.log('✅ SQLite database initialized (WAL mode enabled)')
 console.log('✅ Admin roles system tables created')
 console.log('✅ Report progress tracking table created')
+console.log('✅ Comment voting system tables created')
+
+// Migration: Add upvotes/downvotes columns to existing comments table if they don't exist
+try {
+  db.exec(`
+    ALTER TABLE comments ADD COLUMN upvotes INTEGER DEFAULT 0;
+    ALTER TABLE comments ADD COLUMN downvotes INTEGER DEFAULT 0;
+  `);
+  console.log('✅ Added upvotes/downvotes columns to comments table');
+} catch (error: any) {
+  // Column might already exist, which is fine
+  if (!error.message.includes('duplicate column')) {
+    console.log('⚠️  Could not add upvotes/downvotes columns (they may already exist)');
+  }
+}
 
 // 🔧 Migration: Update existing admin to SuperAdmin role
 try {

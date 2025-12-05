@@ -61,6 +61,23 @@ export const getReports = async (req: Request, res: Response) => {
     const stmt = db.prepare(sql);
     const reports = stmt.all(...params);
 
+    // Get user votes for all reports if authenticated
+    let userVotes: Record<string, number> = {};
+    if (req.userId) {
+      const reportIds = reports.map((r: any) => r.id);
+      if (reportIds.length > 0) {
+        const placeholders = reportIds.map(() => '?').join(',');
+        const userVoteStmt = db.prepare(`
+          SELECT report_id, value FROM votes 
+          WHERE report_id IN (${placeholders}) AND user_id = ?
+        `);
+        const votes = userVoteStmt.all(...reportIds, req.userId) as any[];
+        votes.forEach((vote: any) => {
+          userVotes[vote.report_id] = vote.value;
+        });
+      }
+    }
+
     // Mask coordinates for public feed
     const maskedReports = reports.map((report: any) => {
       const reportData = { ...report };
@@ -93,7 +110,8 @@ export const getReports = async (req: Request, res: Response) => {
         ...reportData,
         aiScore, // Convert snake_case to camelCase for frontend
         createdAt: reportData.created_at, // Convert snake_case to camelCase
-        description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : '')
+        description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
+        user_vote: userVotes[reportData.id] || 0
       };
       
       // Remove the snake_case versions from response
@@ -263,6 +281,14 @@ export const getReport = async (req: Request, res: Response) => {
     const votesStmt = db.prepare('SELECT COUNT(*) as count FROM votes WHERE report_id = ?');
     const votesCount: any = votesStmt.get(id);
 
+    // Get user's vote if authenticated
+    let userVote = 0;
+    if (req.userId) {
+      const userVoteStmt = db.prepare('SELECT value FROM votes WHERE report_id = ? AND user_id = ?');
+      const userVoteResult: any = userVoteStmt.get(id, req.userId);
+      userVote = userVoteResult?.value || 0;
+    }
+
     // Parse JSON fields
     let aiScore = null;
     try {
@@ -282,6 +308,7 @@ export const getReport = async (req: Request, res: Response) => {
       updatedAt: report.updated_at, // Convert snake_case to camelCase
       reporter,
       comments,
+      user_vote: userVote,
       _count: {
         votes: votesCount.count
       }

@@ -1,21 +1,26 @@
 import { Router } from 'express';
 import { 
   getRewards, 
+  getAllRewards,
   redeemReward, 
   createReward, 
   updateReward, 
   deleteReward 
 } from '../controllers/rewardController-sqlite';
 import { authMiddleware } from '../middleware/auth';
-import { adminMiddleware } from '../middleware/adminMiddleware';
+import { adminMiddleware, requirePermission } from '../middleware/adminMiddleware';
 
 const router = Router();
 
 // SQLite endpoints
+// Public endpoint - returns only available rewards
 router.get('/', getRewards);
+// Admin endpoint - returns all rewards (including unavailable)
+router.get('/admin/all', authMiddleware, adminMiddleware, requirePermission('MANAGE_REWARDS'), getAllRewards);
 router.post('/:id/redeem', authMiddleware, redeemReward);
-router.post('/', authMiddleware, adminMiddleware, createReward);
-router.patch('/:id', authMiddleware, adminMiddleware, updateReward);
-router.delete('/:id', authMiddleware, adminMiddleware, deleteReward);
+// CRUD endpoints - require MANAGE_REWARDS permission (superadmin only)
+router.post('/', authMiddleware, adminMiddleware, requirePermission('MANAGE_REWARDS'), createReward);
+router.patch('/:id', authMiddleware, adminMiddleware, requirePermission('MANAGE_REWARDS'), updateReward);
+router.delete('/:id', authMiddleware, adminMiddleware, requirePermission('MANAGE_REWARDS'), deleteReward);
 
 export default router;
