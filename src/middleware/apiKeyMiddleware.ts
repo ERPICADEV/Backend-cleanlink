@@ -6,7 +6,6 @@ export const apiKeyMiddleware = (req: Request, res: Response, next: NextFunction
   // For development/testing, accept ANY API key or use a simple one
   // Remove this in production!
   if (process.env.NODE_ENV === 'development') {
-    console.log('API Key received:', apiKey);
     return next(); // Allow all requests in development
   }
   

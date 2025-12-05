@@ -28,8 +28,6 @@ export const voteReport = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid vote value' });
     }
 
-    console.log('🔍 Starting SQLite vote...');
-
     // Prepare statements with proper typing
     const getReportStmt = db.prepare('SELECT upvotes, downvotes, reporter_id FROM reports WHERE id = ?');
     const getVoteStmt = db.prepare('SELECT value FROM votes WHERE report_id = ? AND user_id = ?')
@@ -103,7 +101,6 @@ export const voteReport = async (req: Request, res: Response) => {
       updateReportStmt.run(newUpvotes, newDownvotes, communityScore, id);
 
       const processingTime = Date.now() - startTime;
-      console.log(`⚡ SQLite vote processed in ${processingTime}ms`);
 
       finalUserVote = userVote;
 

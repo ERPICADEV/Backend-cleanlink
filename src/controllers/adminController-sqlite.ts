@@ -367,8 +367,6 @@ export const resolveReport = async (req: Request, res: Response) => {
           const updateLevelStmt = db.prepare('UPDATE users SET civic_level = ? WHERE id = ?')
           updateLevelStmt.run(newLevel, report.reporter_id)
 
-          console.log(`🎉 User ${report.reporter_id} leveled up: ${previousLevel} → ${newLevel}`)
-
           const levelAuditId = randomUUID()
           const levelAuditStmt = db.prepare(`
             INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)

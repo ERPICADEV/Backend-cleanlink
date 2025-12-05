@@ -6,8 +6,6 @@ import { randomUUID } from 'crypto';
 
 const db = new Database('cleanlink.db');
 
-console.log('🔄 Starting database migration for admin roles system...\n');
-
 try {
   // Step 1: Check if report_progress table exists
   const checkTableStmt = db.prepare(`
@@ -17,7 +15,6 @@ try {
   const tableExists = checkTableStmt.get();
 
   if (!tableExists) {
-    console.log('📊 Creating report_progress table...');
     db.exec(`
       CREATE TABLE report_progress (
         id TEXT PRIMARY KEY,
@@ -43,17 +40,11 @@ try {
       CREATE INDEX idx_report_progress_admin_id ON report_progress(admin_id);
       CREATE INDEX idx_report_progress_status ON report_progress(progress_status);
     `);
-    console.log('✅ report_progress table created\n');
-  } else {
-    console.log('✅ report_progress table already exists\n');
   }
 
   // Step 2: Get current admins table structure
-  console.log('🔍 Checking admins table structure...');
   const checkColumnStmt = db.prepare(`PRAGMA table_info(admins)`);
   const columns = checkColumnStmt.all() as any[];
-  
-  console.log('Current columns:', columns.map((c: any) => c.name).join(', '));
   
   const hasRoleColumn = columns.some((col: any) => col.name === 'role');
   const hasStatusColumn = columns.some((col: any) => col.name === 'status');
@@ -61,16 +52,12 @@ try {
   const hasUpdatedAt = columns.some((col: any) => col.name === 'updated_at');
 
   if (!hasRoleColumn || !hasStatusColumn) {
-    console.log('🔧 Updating admins table structure...');
-    
     // Get existing data first
     const existingAdmins = db.prepare('SELECT * FROM admins').all();
-    console.log(`Found ${existingAdmins.length} existing admin(s)`);
     
     // Clean up any leftover temporary table from failed migration
     try {
       db.exec(`DROP TABLE IF EXISTS admins_new;`);
-      console.log('🧹 Cleaned up temporary table');
     } catch (e) {
       // Ignore if table doesn't exist
     }
@@ -113,15 +100,9 @@ try {
       DROP TABLE admins;
       ALTER TABLE admins_new RENAME TO admins;
     `);
-    
-    console.log('✅ admins table updated with role and status columns\n');
-  } else {
-    console.log('✅ admins table already has role and status columns\n');
   }
 
   // Step 3: Upgrade your specific admin to SuperAdmin
-  console.log('👑 Setting up SuperAdmin...');
-  
   const adminStmt = db.prepare(`
     SELECT * FROM admins WHERE user_id = ?
   `);
@@ -134,7 +115,6 @@ try {
       WHERE user_id = ?
     `);
     updateStmt.run('60db0ccd-b7c9-4377-a386-33ace2bae63f');
-    console.log('✅ sajidkaish9@gmail.com upgraded to SuperAdmin\n');
   } else {
     // Create admin record if it doesn't exist
     const insertStmt = db.prepare(`
@@ -142,24 +122,11 @@ try {
       VALUES (?, ?, 'superadmin', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `);
     insertStmt.run(randomUUID(), '60db0ccd-b7c9-4377-a386-33ace2bae63f');
-    console.log('✅ Created SuperAdmin for sajidkaish9@gmail.com\n');
   }
 
   // Step 4: Verify migration
-  console.log('🔍 Verifying migration...');
-  
   const verifyAdmin = db.prepare('SELECT * FROM admins WHERE user_id = ?');
   const admin = verifyAdmin.get('60db0ccd-b7c9-4377-a386-33ace2bae63f') as any;
-  
-  if (admin && admin.role === 'superadmin') {
-    console.log('✅ Verification successful!');
-    console.log(`   Admin ID: ${admin.id}`);
-    console.log(`   User ID: ${admin.user_id}`);
-    console.log(`   Role: ${admin.role}`);
-    console.log(`   Status: ${admin.status}\n`);
-  } else {
-    console.log('⚠️  Admin found but role not set correctly:', admin);
-  }
 
   // Step 5: Show status statistics
   const statsStmt = db.prepare(`
@@ -171,19 +138,6 @@ try {
       (SELECT COUNT(*) FROM admins) as total_admins
   `);
   const stats = statsStmt.get() as any;
-
-  console.log('📊 Database Statistics:');
-  console.log(`   Total Admins: ${stats.total_admins}`);
-  console.log(`   Progress Records: ${stats.progress_records}`);
-  console.log(`   Assigned Reports: ${stats.assigned_reports}`);
-  console.log(`   In Progress: ${stats.in_progress_reports}`);
-  console.log(`   Pending Approval: ${stats.pending_approval_reports}\n`);
-
-  console.log('✅ Migration completed successfully!\n');
-  console.log('🚀 Next steps:');
-  console.log('   1. Replace your src/config/sqlite.ts with the new version');
-  console.log('   2. Restart your server');
-  console.log('   3. Test login with sajidkaish9@gmail.com\n');
 
 } catch (error) {
   console.error('❌ Migration failed:', error);

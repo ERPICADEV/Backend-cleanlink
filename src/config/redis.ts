@@ -9,7 +9,7 @@ import Redis from 'ioredis';
    });
 
    redis.on('connect', () => {
-     console.log('✅ Redis connected');
+     // Redis connected
    });
 
    redis.on('error', (err) => {

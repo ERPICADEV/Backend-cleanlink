@@ -19,8 +19,6 @@ async function createAdmin(params: CreateAdminParams) {
   const { email, password, username, role, region } = params;
 
   try {
-    console.log(`\n🔨 Creating ${role} user...`);
-
     // 1. Check if user already exists
     const checkUserStmt = db.prepare('SELECT id FROM users WHERE email = ?');
     let user: any = checkUserStmt.get(email.toLowerCase());
@@ -28,7 +26,6 @@ async function createAdmin(params: CreateAdminParams) {
     let userId: string;
 
     if (user) {
-      console.log(`✅ User already exists: ${email}`);
       userId = user.id;
     } else {
       // 2. Create user account
@@ -54,8 +51,6 @@ async function createAdmin(params: CreateAdminParams) {
         0.5, // trust_score
         'active' // status
       );
-
-      console.log(`✅ User created: ${email} (ID: ${userId})`);
     }
 
     // 3. Check if admin record exists
@@ -70,7 +65,6 @@ async function createAdmin(params: CreateAdminParams) {
         WHERE user_id = ?
       `);
       updateAdminStmt.run(role, region || null, userId);
-      console.log(`✅ Admin role updated: ${existingAdmin.role} → ${role}`);
     } else {
       // Create new admin record
       const adminId = randomUUID();
@@ -79,7 +73,6 @@ async function createAdmin(params: CreateAdminParams) {
         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `);
       insertAdminStmt.run(adminId, userId, region || null, role);
-      console.log(`✅ Admin record created with role: ${role}`);
     }
 
     // 4. Verify creation
@@ -92,15 +85,6 @@ async function createAdmin(params: CreateAdminParams) {
       WHERE u.id = ?
     `);
     const admin = verifyStmt.get(userId) as any;
-
-    console.log('\n📋 Admin Details:');
-    console.log(`   Email: ${admin.email}`);
-    console.log(`   Username: ${admin.username}`);
-    console.log(`   User ID: ${admin.id}`);
-    console.log(`   Admin ID: ${admin.admin_id}`);
-    console.log(`   Role: ${admin.role}`);
-    console.log(`   Status: ${admin.status}`);
-    console.log('\n✅ Admin created successfully!\n');
 
     return admin;
   } catch (error) {

@@ -98,7 +98,6 @@ export const voteComment = async (req: Request, res: Response) => {
       updateCommentStmt.run(newUpvotes, newDownvotes, commentId);
 
       const processingTime = Date.now() - startTime;
-      console.log(`⚡ SQLite comment vote processed in ${processingTime}ms`);
 
       finalUserVote = userVote;
 

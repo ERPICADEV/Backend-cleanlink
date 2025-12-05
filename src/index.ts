@@ -202,5 +202,5 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 CleanLink API (SQLite) running on port ${PORT}`);
+  // Server started
 });

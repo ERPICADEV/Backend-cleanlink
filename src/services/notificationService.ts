@@ -36,7 +36,6 @@ export class NotificationService {
         0 // SQLite boolean: 0 = false, 1 = true
       );
       
-      console.log(`📬 Notification created for user ${userId}: ${title}`);
       return { id, userId, type, title, message, data: data || {} };
     } catch (error) {
       console.error('Failed to create notification:', error);

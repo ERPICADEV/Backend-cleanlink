@@ -201,23 +201,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_report_progress_status ON report_progress(progress_status);
 `);
 
-console.log('✅ SQLite database initialized (WAL mode enabled)')
-console.log('✅ Admin roles system tables created')
-console.log('✅ Report progress tracking table created')
-console.log('✅ Comment voting system tables created')
-
 // Migration: Add upvotes/downvotes columns to existing comments table if they don't exist
 try {
   db.exec(`
     ALTER TABLE comments ADD COLUMN upvotes INTEGER DEFAULT 0;
     ALTER TABLE comments ADD COLUMN downvotes INTEGER DEFAULT 0;
   `);
-  console.log('✅ Added upvotes/downvotes columns to comments table');
 } catch (error: any) {
   // Column might already exist, which is fine
-  if (!error.message.includes('duplicate column')) {
-    console.log('⚠️  Could not add upvotes/downvotes columns (they may already exist)');
-  }
 }
 
 // 🔧 Migration: Update existing admin to SuperAdmin role
@@ -228,15 +219,9 @@ try {
     WHERE user_id = ?
   `);
   
-  const result = updateAdminStmt.run('60db0ccd-b7c9-4377-a386-33ace2bae63f');
-  
-  if (result.changes > 0) {
-    console.log('✅ Upgraded sajidkaish9@gmail.com to SuperAdmin role');
-  } else {
-    console.log('⚠️  Admin record not found - you may need to create it manually');
-  }
+  updateAdminStmt.run('60db0ccd-b7c9-4377-a386-33ace2bae63f');
 } catch (error) {
-  console.log('⚠️  Could not upgrade admin role (table might be empty)');
+  // Admin role upgrade failed - table might be empty
 }
 
 export default db;

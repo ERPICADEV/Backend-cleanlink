@@ -30,8 +30,6 @@ export const getMapReports = async (req: Request, res: Response) => {
     if (bounds) {
       const [southWestLat, southWestLng, northEastLat, northEastLng] = 
         (bounds as string).split(',').map(parseFloat);
-      
-      console.log(`Map bounds: ${southWestLat},${southWestLng} to ${northEastLat},${northEastLng}`);
     }
 
     const sql = `

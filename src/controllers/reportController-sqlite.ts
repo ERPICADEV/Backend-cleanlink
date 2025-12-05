@@ -171,12 +171,8 @@ export const createReport = async (req: Request, res: Response) => {
       'pending' // status
     );
 
-    console.log('✅ Report created:', reportId);
-    console.log('📋 Calling enqueueAIAnalysis...');
-
     try {
       await enqueueAIAnalysis(reportId);
-      console.log('🎯 AI queuing completed for report:', reportId);
     } catch (aiError) {
       console.error('❌ Failed to enqueue AI analysis:', aiError);
     }

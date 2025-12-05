@@ -9,7 +9,6 @@ export const withRetry = async <T>(
       } catch (error) {
         if (attempt === maxRetries) throw error;
         
-        console.log(`🔄 Database retry ${attempt}/${maxRetries}...`);
         await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
       }
     }

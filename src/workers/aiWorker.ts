@@ -11,7 +11,6 @@ const retryQuery = async (query: () => Promise<any>, maxRetries = 3) => {
       return await query()
     } catch (error) {
       if (i === maxRetries - 1) throw error
-      console.log(`Retrying database query (attempt ${i + 1})...`)
       await new Promise(resolve => setTimeout(resolve, 1000))
     }
   }
@@ -19,8 +18,6 @@ const retryQuery = async (query: () => Promise<any>, maxRetries = 3) => {
 
 export const processReportWithAI = async (reportId: string) => {
   try {
-    console.log(`Processing report ${reportId} with AI...`)
-    
     if (!apiKey) {
       console.error('❌ Cannot process AI - OPENROUTER_API_KEY is missing from .env file')
       console.error('   Please add OPENROUTER_API_KEY=your_key_here to your .env file')
@@ -75,7 +72,6 @@ export const processReportWithAI = async (reportId: string) => {
       category: report.category,
     }
 
-    console.log('🤖 Calling AI service...')
     const aiResult = await aiService.analyzeReport(reportData)
     
     // Only save AI analysis if it was successful
@@ -84,8 +80,6 @@ export const processReportWithAI = async (reportId: string) => {
       console.error('   Fix your OPENROUTER_API_KEY to get real AI analysis')
       return
     }
-    
-    console.log('✅ AI analysis result:', aiResult)
 
     // Update report with AI results using retry
     await retryQuery(() => {
@@ -118,8 +112,6 @@ export const processReportWithAI = async (reportId: string) => {
         )
       )
     })
-
-    console.log(`✅ AI processing complete for report ${reportId}`)
     
   } catch (error) {
     console.error(`❌ AI processing failed for report ${reportId}:`, error)
