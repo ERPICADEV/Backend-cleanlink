@@ -2,6 +2,19 @@ import { Request, Response } from 'express';
 import db from '../config/sqlite';
 import { LEVEL_CONFIG, calculateLevelProgress } from '../utils/levelConfig';
 
+// Helper to safely parse region (handles both JSON strings and plain strings)
+const parseRegion = (regionStr: string | null): string | Record<string, unknown> | null => {
+  if (!regionStr) return null;
+  try {
+    // Try to parse as JSON first
+    const parsed = JSON.parse(regionStr);
+    return parsed;
+  } catch {
+    // If parsing fails, it's a plain string, return as-is
+    return regionStr;
+  }
+};
+
 // GET /api/v1/users/me
 export const getMe = async (req: Request, res: Response) => {
   try {
@@ -48,7 +61,7 @@ export const getMe = async (req: Request, res: Response) => {
 
     const userData = {
       ...user,
-      region: user.region ? JSON.parse(user.region) : null,
+      region: parseRegion(user.region),
       badges: user.badges ? JSON.parse(user.badges) : [],
       civicPoints: user.civic_points,
       civicLevel: user.civic_level,
@@ -162,7 +175,7 @@ export const updateMe = async (req: Request, res: Response) => {
     // Parse region if exists
     const responseData = {
       ...updated,
-      region: updated.region ? JSON.parse(updated.region) : null,
+      region: parseRegion(updated.region),
       civicPoints: updated.civic_points,
       avatarUrl: updated.avatar_url
     };
@@ -182,8 +195,18 @@ export const getPublicProfile = async (req: Request, res: Response) => {
     const { id } = req.params;
 
     const userStmt = db.prepare(`
-      SELECT id, username, badges, civic_points, civic_level, region
-      FROM users WHERE id = ?
+      SELECT 
+        id, 
+        username, 
+        badges, 
+        civic_points, 
+        civic_level, 
+        region,
+        bio,
+        avatar_url,
+        trust_score
+      FROM users 
+      WHERE id = ?
     `);
     const user: any = userStmt.get(id);
 
@@ -200,7 +223,10 @@ export const getPublicProfile = async (req: Request, res: Response) => {
       badges: user.badges ? JSON.parse(user.badges) : [],
       civicPoints: user.civic_points,
       civicLevel: user.civic_level,
-      region: user.region ? JSON.parse(user.region) : null,
+      region: parseRegion(user.region),
+      bio: user.bio || null,
+      avatarUrl: user.avatar_url || null,
+      trustScore: user.trust_score ?? null,
     };
 
     return res.status(200).json(publicProfile);
@@ -316,7 +342,7 @@ export const updateRegion = async (req: Request, res: Response) => {
 
     const responseData = {
       ...updated,
-      region: updated.region ? JSON.parse(updated.region) : null
+      region: parseRegion(updated.region)
     };
 
     return res.status(200).json(responseData);

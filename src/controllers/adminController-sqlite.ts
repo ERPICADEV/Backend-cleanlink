@@ -63,10 +63,16 @@ export const getAdminReports = async (req: Request, res: Response) => {
       SELECT 
         r.*,
         u.username, u.email, u.phone, u.region as user_region,
+        rp.admin_id as assigned_to,
+        assigned_admin.username as assigned_admin_name,
+        assigned_admin.email as assigned_admin_email,
         (SELECT COUNT(*) FROM comments c WHERE c.report_id = r.id) as comments_count,
         (SELECT COUNT(*) FROM votes v WHERE v.report_id = r.id) as votes_count
       FROM reports r
       LEFT JOIN users u ON r.reporter_id = u.id
+      LEFT JOIN report_progress rp ON r.id = rp.report_id
+      LEFT JOIN admins a ON rp.admin_id = a.id
+      LEFT JOIN users assigned_admin ON a.user_id = assigned_admin.id
       ${whereClause}
       ${orderBy}
       LIMIT ?
@@ -97,13 +103,22 @@ export const getAdminReports = async (req: Request, res: Response) => {
         downvotes: report.downvotes,
         community_score: report.community_score,
         created_at: report.created_at,
+        mcd_verified_by: report.mcd_verified_by,
+        assigned_to: report.assigned_to,
+        assignedToName: report.assigned_admin_name || null,
         aiScore,
         reporter: report.reporter_id ? {
           id: report.reporter_id,
           username: report.username,
           email: report.email,
           phone: report.phone,
-          region: report.user_region ? JSON.parse(report.user_region) : null,
+          region: report.user_region ? (() => {
+            try {
+              return JSON.parse(report.user_region);
+            } catch {
+              return report.user_region;
+            }
+          })() : null,
         } : null,
         comments_count: report.comments_count,
         votes_count: report.votes_count,
