@@ -53,9 +53,11 @@ export const getReports = async (req: Request, res: Response) => {
     const sql = `
       SELECT 
         id, title, description, category, images, location, visibility,
-        upvotes, downvotes, community_score, status, created_at, 
+        community_score, status, created_at, 
         reporter_id, reporter_display, ai_score,
-        (SELECT COUNT(*) FROM comments WHERE report_id = reports.id) as comments_count
+        (SELECT COUNT(*) FROM comments WHERE report_id = reports.id) as comments_count,
+        (SELECT COUNT(*) FROM votes WHERE report_id = reports.id AND value = 1) as upvotes,
+        (SELECT COUNT(*) FROM votes WHERE report_id = reports.id AND value = -1) as downvotes
       FROM reports 
       ${whereClause}
       ${orderBy}
@@ -125,6 +127,8 @@ export const getReports = async (req: Request, res: Response) => {
         aiScore, // Convert snake_case to camelCase for frontend
         createdAt: reportData.created_at, // Convert snake_case to camelCase
         description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
+        upvotes: parseInt(reportData.upvotes) || 0,
+        downvotes: parseInt(reportData.downvotes) || 0,
         user_vote: userVotes[reportData.id] || 0
       };
       
@@ -227,8 +231,15 @@ export const getReport = async (req: Request, res: Response) => {
       isAdmin = !!adminResult.rows[0];
     }
     
-    // Get report
-    const reportResult = await pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+    // Get report with dynamically calculated vote counts
+    const reportResult = await pool.query(`
+      SELECT 
+        r.*,
+        (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = 1) as upvotes,
+        (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = -1) as downvotes
+      FROM reports r
+      WHERE r.id = $1
+    `, [id]);
     const report: any = reportResult.rows[0];
 
     if (!report) {
@@ -247,9 +258,14 @@ export const getReport = async (req: Request, res: Response) => {
       reporter = reporterResult.rows[0];
     }
 
-    // Get comments with authors
+    // Get comments with authors and dynamically calculated vote counts
     const commentsResult = await pool.query(`
-      SELECT c.*, u.username, u.badges 
+      SELECT 
+        c.*, 
+        u.username, 
+        u.badges,
+        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
+        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
       WHERE c.report_id = $1 
@@ -259,6 +275,13 @@ export const getReport = async (req: Request, res: Response) => {
 
     // Format comments to match getComments endpoint structure
     const formatComment = async (comment: any): Promise<any> => {
+      // Get user's vote for this comment if authenticated
+      let userVote = 0;
+      if (req.userId) {
+        const voteResult = await pool.query('SELECT value FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [comment.id, req.userId]);
+        userVote = voteResult.rows[0]?.value || 0;
+      }
+
       const formatted: any = {
         id: comment.id,
         text: comment.text,
@@ -268,13 +291,21 @@ export const getReport = async (req: Request, res: Response) => {
           badges: comment.badges ? JSON.parse(comment.badges) : [],
         },
         parent_comment_id: comment.parent_comment_id,
+        upvotes: parseInt(comment.upvotes) || 0,
+        downvotes: parseInt(comment.downvotes) || 0,
+        user_vote: userVote,
         created_at: comment.created_at,
         updated_at: comment.updated_at,
       };
 
-      // Get replies recursively
+      // Get replies recursively with dynamically calculated vote counts
       const repliesResult = await pool.query(`
-        SELECT c.*, u.username, u.badges 
+        SELECT 
+          c.*, 
+          u.username, 
+          u.badges,
+          (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
+          (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
         FROM comments c 
         LEFT JOIN users u ON c.author_id = u.id 
         WHERE c.parent_comment_id = $1
@@ -321,6 +352,8 @@ export const getReport = async (req: Request, res: Response) => {
       aiScore, // Convert snake_case to camelCase for frontend
       createdAt: report.created_at, // Convert snake_case to camelCase
       updatedAt: report.updated_at, // Convert snake_case to camelCase
+      upvotes: parseInt(report.upvotes) || 0,
+      downvotes: parseInt(report.downvotes) || 0,
       reporter,
       comments,
       user_vote: userVote,

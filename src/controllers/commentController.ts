@@ -139,9 +139,14 @@ export const getComments = async (req: Request, res: Response) => {
       });
     }
 
-    // Get top-level comments (no parent)
+    // Get top-level comments (no parent) with dynamically calculated vote counts
     const commentsResult = await pool.query(`
-      SELECT c.*, u.username, u.badges 
+      SELECT 
+        c.*, 
+        u.username, 
+        u.badges,
+        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
+        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
       WHERE c.report_id = $1 AND c.parent_comment_id IS NULL
@@ -168,17 +173,22 @@ export const getComments = async (req: Request, res: Response) => {
           badges: comment.badges ? JSON.parse(comment.badges) : [],
         },
         parent_comment_id: comment.parent_comment_id,
-        upvotes: comment.upvotes || 0,
-        downvotes: comment.downvotes || 0,
+        upvotes: parseInt(comment.upvotes) || 0,
+        downvotes: parseInt(comment.downvotes) || 0,
         user_vote: userVote,
         created_at: comment.created_at,
         updated_at: comment.updated_at,
       };
 
-      // Get replies if requested
+      // Get replies if requested with dynamically calculated vote counts
       if (include_replies === 'true') {
         const repliesResult = await pool.query(`
-          SELECT c.*, u.username, u.badges 
+          SELECT 
+            c.*, 
+            u.username, 
+            u.badges,
+            (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
+            (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
           FROM comments c 
           LEFT JOIN users u ON c.author_id = u.id 
           WHERE c.parent_comment_id = $1
