@@ -6,11 +6,56 @@ export function isDatabaseConnectionError(error: any): boolean {
   if (!error) return false;
   
   // Check for common connection error codes
-  const connectionErrorCodes = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET'];
-  const connectionErrorMessages = ['connection', 'connect', 'database', 'postgres'];
+  const connectionErrorCodes = [
+    'ECONNREFUSED', 
+    'ENOTFOUND', 
+    'ETIMEDOUT', 
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ENETUNREACH',
+    'EHOSTUNREACH'
+  ];
+  
+  // PostgreSQL-specific error codes for connection issues
+  const postgresConnectionErrorCodes = [
+    '57P01', // admin_shutdown
+    '57P02', // crash_shutdown
+    '57P03', // cannot_connect_now
+    '08003', // connection_does_not_exist
+    '08006', // connection_failure
+    '08001', // sqlclient_unable_to_establish_sqlconnection
+    '08004', // sqlserver_rejected_establishment_of_sqlconnection
+    '08000', // connection_exception
+    '53300', // too_many_connections
+    '57P04', // database_shutdown
+  ];
+  
+  const connectionErrorMessages = [
+    'connection', 
+    'connect', 
+    'database', 
+    'postgres',
+    'timeout',
+    'refused',
+    'network',
+    'unreachable',
+    'pool',
+    'client has been closed',
+    'Connection terminated',
+    'Connection terminated unexpectedly',
+    'server closed the connection',
+    'no connection to the server',
+  ];
   
   // Check error code
-  if (error.code && connectionErrorCodes.includes(error.code)) {
+  if (error.code) {
+    if (connectionErrorCodes.includes(error.code) || postgresConnectionErrorCodes.includes(error.code)) {
+      return true;
+    }
+  }
+  
+  // Check PostgreSQL error code (different property)
+  if (error.code && postgresConnectionErrorCodes.includes(error.code)) {
     return true;
   }
   
@@ -47,6 +92,14 @@ export function isTableMissingError(error: any): boolean {
 
 export function handleDatabaseError(error: any, defaultMessage: string = 'Database operation failed') {
   if (isDatabaseConnectionError(error)) {
+    // Log detailed error information for debugging
+    console.error('Database connection error details:', {
+      code: error.code,
+      message: error.message,
+      name: error.name,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    
     return {
       status: 503, // Service Unavailable
       error: {

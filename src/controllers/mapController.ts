@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { pool } from '../config/postgres';
 import { handleDatabaseError } from '../utils/dbErrorHandler';
+import { withRetry } from '../utils/databaseRetry';
 
 // GET /api/v1/map/reports
 export const getMapReports = async (req: Request, res: Response) => {
@@ -48,7 +49,12 @@ export const getMapReports = async (req: Request, res: Response) => {
     
     params.push(parseInt(limit as string));
 
-    const result = await pool.query(sql, params);
+    // Use retry logic for database queries to handle transient connection issues
+    const result = await withRetry(
+      () => pool.query(sql, params),
+      3, // max retries
+      1000 // initial delay in ms
+    );
     const reports = result.rows as any[];
 
     // Format for map consumption

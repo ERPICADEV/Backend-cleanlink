@@ -33,11 +33,44 @@ import { pool } from './config/postgres';
 // Add error handlers for database connection
 pool.on('error', (err) => {
   console.error('❌ Unexpected PostgreSQL pool error:', err);
+  console.error('Error details:', {
+    code: err.code,
+    message: err.message,
+    name: err.name
+  });
 });
 
-pool.on('connect', () => {
-  console.log('✅ PostgreSQL connected');
+pool.on('connect', (client) => {
+  console.log('✅ PostgreSQL client connected');
 });
+
+pool.on('acquire', () => {
+  // Connection acquired from pool
+});
+
+pool.on('remove', () => {
+  // Connection removed from pool
+});
+
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    const result = await pool.query('SELECT NOW() as current_time');
+    console.log('✅ Database connection test successful:', result.rows[0].current_time);
+  } catch (error: any) {
+    console.error('❌ Database connection test failed:', {
+      code: error.code,
+      message: error.message,
+      name: error.name
+    });
+    console.error('⚠️  Server will start but database operations may fail');
+  }
+}
+
+// Test connection after a short delay to allow pool to initialize
+setTimeout(() => {
+  testDatabaseConnection();
+}, 1000);
 
 const app = express();
 const PORT = process.env.PORT || 3000;

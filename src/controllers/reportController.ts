@@ -3,6 +3,7 @@ import { pool } from '../config/postgres';
 import { randomUUID } from 'crypto';
 import { enqueueAIAnalysis } from '../utils/queue';
 import { handleDatabaseError } from '../utils/dbErrorHandler';
+import { withRetry } from '../utils/databaseRetry';
 
 // GET /api/v1/reports (feed)
 export const getReports = async (req: Request, res: Response) => {
@@ -63,7 +64,12 @@ export const getReports = async (req: Request, res: Response) => {
     
     params.push(parseInt(limit as string));
     
-    const result = await pool.query(sql, params);
+    // Use retry logic for database queries to handle transient connection issues
+    const result = await withRetry(
+      () => pool.query(sql, params),
+      3, // max retries
+      1000 // initial delay in ms
+    );
     const reports = result.rows;
 
     // Get user votes for all reports if authenticated
@@ -72,10 +78,14 @@ export const getReports = async (req: Request, res: Response) => {
       const reportIds = reports.map((r: any) => r.id);
       if (reportIds.length > 0) {
         const placeholders = reportIds.map((_, i) => `$${i + 1}`).join(',');
-        const userVoteResult = await pool.query(`
-          SELECT report_id, value FROM votes 
-          WHERE report_id IN (${placeholders}) AND user_id = $${reportIds.length + 1}
-        `, [...reportIds, req.userId]);
+        const userVoteResult = await withRetry(
+          () => pool.query(`
+            SELECT report_id, value FROM votes 
+            WHERE report_id IN (${placeholders}) AND user_id = $${reportIds.length + 1}
+          `, [...reportIds, req.userId]),
+          3,
+          1000
+        );
         userVoteResult.rows.forEach((vote: any) => {
           userVotes[vote.report_id] = vote.value;
         });
