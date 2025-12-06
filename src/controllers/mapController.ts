@@ -158,10 +158,13 @@ export const getMapClusters = async (req: Request, res: Response) => {
       features: clusterData
     });
   } catch (error) {
-    console.error('Get map clusters error:', error);
-    res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch cluster data' },
-    });
+    const errorResponse = handleDatabaseError(error, 'Failed to fetch cluster data');
+    if (errorResponse.status === 503) {
+      console.warn('⚠️  Database connection error in getMapClusters');
+    } else {
+      console.error('Get map clusters error:', error);
+    }
+    res.status(errorResponse.status).json(errorResponse.error);
   }
 };
 
@@ -218,10 +221,13 @@ export const getMapStats = async (req: Request, res: Response) => {
       }))
     });
   } catch (error) {
-    console.error('Get map stats error:', error);
-    res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch map stats' },
-    });
+    const errorResponse = handleDatabaseError(error, 'Failed to fetch map stats');
+    if (errorResponse.status === 503) {
+      console.warn('⚠️  Database connection error in getMapStats');
+    } else {
+      console.error('Get map stats error:', error);
+    }
+    res.status(errorResponse.status).json(errorResponse.error);
   }
 };
 

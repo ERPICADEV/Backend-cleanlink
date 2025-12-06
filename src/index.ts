@@ -201,6 +201,59 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
   }
 });
 
+// Global error handler middleware - must be after all routes
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Unhandled error:', err);
+  
+  // Check if it's a database connection error
+  const isDbError = err.code === 'ECONNREFUSED' || 
+                    err.code === 'ENOTFOUND' || 
+                    err.code === 'ETIMEDOUT' ||
+                    err.message?.toLowerCase().includes('connection') ||
+                    err.message?.toLowerCase().includes('database') ||
+                    err.message?.toLowerCase().includes('postgres');
+
+  if (isDbError) {
+    return res.status(503).json({
+      error: {
+        code: 'DATABASE_UNAVAILABLE',
+        message: 'Database connection unavailable. Please try again later.',
+      }
+    });
+  }
+
+  // Check if it's a Redis connection error
+  const isRedisError = err.message?.toLowerCase().includes('redis') ||
+                       err.message?.toLowerCase().includes('connection refused');
+
+  if (isRedisError) {
+    return res.status(503).json({
+      error: {
+        code: 'REDIS_UNAVAILABLE',
+        message: 'Cache service unavailable. Please try again later.',
+      }
+    });
+  }
+
+  // Default error response
+  res.status(err.status || 500).json({
+    error: {
+      code: err.code || 'INTERNAL_ERROR',
+      message: err.message || 'An unexpected error occurred',
+    }
+  });
+});
+
+// 404 handler - must be after all routes and error handler
+app.use((req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    error: {
+      code: 'NOT_FOUND',
+      message: `Route ${req.method} ${req.path} not found`,
+    }
+  });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
