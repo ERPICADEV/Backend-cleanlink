@@ -1,16 +1,13 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkForDuplicates = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const checkForDuplicates = async (reportId, location, imageHashes, text) => {
     try {
         const { lat, lng } = location;
         // Check for nearby reports within 200 meters in last 30 days
         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-        const stmt = sqlite_1.default.prepare(`
+        const result = await postgres_1.pool.query(`
       SELECT 
         id, 
         title, 
@@ -18,13 +15,13 @@ const checkForDuplicates = async (reportId, location, imageHashes, text) => {
         location, 
         category, 
         images,
-        createdAt
+        created_at as "createdAt"
       FROM reports
-      WHERE id != ? 
-        AND createdAt >= ?
+      WHERE id != $1 
+        AND created_at >= $2
         AND status != 'duplicate'
-    `);
-        const nearbyReports = stmt.all(reportId, thirtyDaysAgo);
+    `, [reportId, thirtyDaysAgo]);
+        const nearbyReports = result.rows;
         // Simple distance calculation (Haversine would be better for production)
         const calculateDistance = (lat1, lng1, lat2, lng2) => {
             const R = 6371; // Earth's radius in km

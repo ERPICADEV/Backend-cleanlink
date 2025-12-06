@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.voteReport = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const notificationService_1 = require("../services/notificationService");
 const voteReport = async (req, res) => {
@@ -17,57 +14,74 @@ const voteReport = async (req, res) => {
         if (voteValue !== 1 && voteValue !== -1) {
             return res.status(400).json({ error: 'Invalid vote value' });
         }
-        console.log('🔍 Starting SQLite vote...');
-        // Prepare statements with proper typing
-        const getReportStmt = sqlite_1.default.prepare('SELECT upvotes, downvotes, reporter_id FROM reports WHERE id = ?');
-        const getVoteStmt = sqlite_1.default.prepare('SELECT value FROM votes WHERE report_id = ? AND user_id = ?');
-        const deleteVoteStmt = sqlite_1.default.prepare('DELETE FROM votes WHERE report_id = ? AND user_id = ?');
-        const updateVoteStmt = sqlite_1.default.prepare('UPDATE votes SET value = ? WHERE report_id = ? AND user_id = ?');
-        const insertVoteStmt = sqlite_1.default.prepare('INSERT INTO votes (id, report_id, user_id, value) VALUES (?, ?, ?, ?)');
-        const updateReportStmt = sqlite_1.default.prepare('UPDATE reports SET upvotes = ?, downvotes = ?, community_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
         // Transaction for atomic operations
+        const client = await postgres_1.pool.connect();
         let reportOwnerId = null;
         let finalUserVote = voteValue;
-        sqlite_1.default.transaction(() => {
-            // 1. Get report with type assertion
-            const report = getReportStmt.get(id);
+        try {
+            await client.query('BEGIN');
+            // 1. Get report
+            const reportResult = await client.query('SELECT upvotes, downvotes, reporter_id FROM reports WHERE id = $1', [id]);
+            const report = reportResult.rows[0];
             if (!report) {
                 throw new Error('REPORT_NOT_FOUND');
             }
             const { upvotes, downvotes, reporter_id } = report;
             reportOwnerId = reporter_id || null;
-            // 2. Check existing vote with type assertion
-            const existingVote = getVoteStmt.get(id, userId);
+            // 2. Check existing vote
+            const voteResult = await client.query('SELECT value FROM votes WHERE report_id = $1 AND user_id = $2', [id, userId]);
+            const existingVote = voteResult.rows[0];
             let userVote = voteValue;
             let newUpvotes = upvotes;
             let newDownvotes = downvotes;
             // 3. Handle vote logic
             if (existingVote) {
                 if (existingVote.value === voteValue) {
-                    // Remove vote
-                    deleteVoteStmt.run(id, userId);
+                    // User clicked the same vote button - toggle off (remove vote, set to 0)
+                    await client.query('DELETE FROM votes WHERE report_id = $1 AND user_id = $2', [id, userId]);
+                    // Remove the vote from counts
+                    if (voteValue === 1) {
+                        newUpvotes = Math.max(0, upvotes - 1);
+                        newDownvotes = downvotes;
+                    }
+                    else {
+                        newUpvotes = upvotes;
+                        newDownvotes = Math.max(0, downvotes - 1);
+                    }
                     userVote = 0;
-                    newUpvotes = voteValue === 1 ? upvotes - 1 : upvotes;
-                    newDownvotes = voteValue === -1 ? downvotes - 1 : downvotes;
                 }
                 else {
                     // Change vote
-                    updateVoteStmt.run(voteValue, id, userId);
-                    newUpvotes = voteValue === 1 ? upvotes + 1 : upvotes - 1;
-                    newDownvotes = voteValue === -1 ? downvotes + 1 : downvotes - 1;
+                    await client.query('UPDATE votes SET value = $1 WHERE report_id = $2 AND user_id = $3', [voteValue, id, userId]);
+                    // Remove old vote from counts
+                    if (existingVote.value === 1) {
+                        newUpvotes = Math.max(0, upvotes - 1);
+                    }
+                    else {
+                        newDownvotes = Math.max(0, downvotes - 1);
+                    }
+                    // Add new vote to counts
+                    if (voteValue === 1) {
+                        newUpvotes = newUpvotes + 1;
+                    }
+                    else {
+                        newDownvotes = newDownvotes + 1;
+                    }
+                    userVote = voteValue;
                 }
             }
             else {
                 // New vote
-                insertVoteStmt.run((0, crypto_1.randomUUID)(), id, userId, voteValue);
+                await client.query('INSERT INTO votes (id, report_id, user_id, value) VALUES ($1, $2, $3, $4)', [(0, crypto_1.randomUUID)(), id, userId, voteValue]);
                 newUpvotes = voteValue === 1 ? upvotes + 1 : upvotes;
                 newDownvotes = voteValue === -1 ? downvotes + 1 : downvotes;
+                userVote = voteValue;
             }
             // 4. Calculate score and update report
             const communityScore = (newUpvotes - newDownvotes) / Math.max(1, newUpvotes + newDownvotes);
-            updateReportStmt.run(newUpvotes, newDownvotes, communityScore, id);
+            await client.query('UPDATE reports SET upvotes = $1, downvotes = $2, community_score = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4', [newUpvotes, newDownvotes, communityScore, id]);
+            await client.query('COMMIT');
             const processingTime = Date.now() - startTime;
-            console.log(`⚡ SQLite vote processed in ${processingTime}ms`);
             finalUserVote = userVote;
             res.json({
                 report_id: id,
@@ -77,7 +91,14 @@ const voteReport = async (req, res) => {
                 user_vote: userVote,
                 processing_time: processingTime
             });
-        })();
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
         // Send notification outside of transaction (fire-and-forget)
         if (reportOwnerId && reportOwnerId !== userId && finalUserVote !== 0) {
             notificationService_1.NotificationService.notifyVote(reportOwnerId, id, finalUserVote);

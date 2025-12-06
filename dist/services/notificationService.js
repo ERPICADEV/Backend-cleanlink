@@ -1,21 +1,22 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NotificationService = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 class NotificationService {
     static async createNotification(userId, type, title, message, data) {
         try {
             const id = (0, crypto_1.randomUUID)();
-            const stmt = sqlite_1.default.prepare(
-            // Column names must match SQLite schema (config/sqlite.ts)
-            'INSERT INTO notifications (id, user_id, type, title, message, data, created_at, is_read) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-            const result = stmt.run(id, userId, type, title, message, JSON.stringify(data || {}), new Date().toISOString(), 0 // SQLite boolean: 0 = false, 1 = true
-            );
-            console.log(`📬 Notification created for user ${userId}: ${title}`);
+            await postgres_1.pool.query('INSERT INTO notifications (id, user_id, type, title, message, data, created_at, is_read) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
+                id,
+                userId,
+                type,
+                title,
+                message,
+                JSON.stringify(data || {}),
+                new Date().toISOString(),
+                false // PostgreSQL boolean
+            ]);
             return { id, userId, type, title, message, data: data || {} };
         }
         catch (error) {

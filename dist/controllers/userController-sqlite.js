@@ -1,27 +1,26 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateRegion = exports.getRegions = exports.getMyComments = exports.getPublicProfile = exports.updateMe = exports.getMe = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const levelConfig_1 = require("../utils/levelConfig");
-const mapAdminRole = (role) => {
-    if (!role)
-        return 'user';
-    const normalized = role.toLowerCase();
-    if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
-        return 'super_admin';
+// Helper to safely parse region (handles both JSON strings and plain strings)
+const parseRegion = (regionStr) => {
+    if (!regionStr)
+        return null;
+    try {
+        // Try to parse as JSON first
+        const parsed = JSON.parse(regionStr);
+        return parsed;
     }
-    if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
-        return 'field_admin';
+    catch {
+        // If parsing fails, it's a plain string, return as-is
+        return regionStr;
     }
-    return 'user';
 };
 // GET /api/v1/users/me
 const getMe = async (req, res) => {
     try {
-        const userStmt = sqlite_1.default.prepare(`
+        const result = await postgres_1.pool.query(`
       SELECT 
         u.id,
         u.username,
@@ -37,27 +36,39 @@ const getMe = async (req, res) => {
         a.region_assigned as admin_region
       FROM users u
       LEFT JOIN admins a ON a.user_id = u.id
-      WHERE u.id = ?
-    `);
-        const user = userStmt.get(req.userId);
+      WHERE u.id = $1
+    `, [req.userId]);
+        const user = result.rows[0];
         if (!user) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'User not found' },
             });
         }
         // Parse JSON fields
-        const clientRole = mapAdminRole(user.admin_role);
+        const mapAdminRole = (role) => {
+            if (!role)
+                return 'user';
+            const normalized = role.toLowerCase();
+            if (['super_admin', 'superadmin', 'super-admin'].includes(normalized)) {
+                return 'super_admin';
+            }
+            if (['field_admin', 'fieldadmin', 'admin', 'normal_admin', 'normal-admin'].includes(normalized)) {
+                return 'field_admin';
+            }
+            return 'user';
+        };
+        const normalizedRole = mapAdminRole(user.admin_role);
         const userData = {
             ...user,
-            region: user.region ? JSON.parse(user.region) : null,
+            region: parseRegion(user.region),
             badges: user.badges ? JSON.parse(user.badges) : [],
             civicPoints: user.civic_points,
             civicLevel: user.civic_level,
             avatarUrl: user.avatar_url,
             trustScore: user.trust_score,
-            role: clientRole,
+            role: normalizedRole,
             adminRegion: user.admin_region || null,
-            permissions: clientRole === 'user' ? [] : ['admin:access'],
+            permissions: normalizedRole === 'user' ? [] : ['admin:access'],
         };
         // Calculate level progress
         const currentLevel = userData.civicLevel;
@@ -99,8 +110,8 @@ const updateMe = async (req, res) => {
         }
         // Check username uniqueness
         if (username) {
-            const existingStmt = sqlite_1.default.prepare('SELECT id FROM users WHERE username = ? AND id != ?');
-            const existing = existingStmt.get(username, req.userId);
+            const existingResult = await postgres_1.pool.query('SELECT id FROM users WHERE username = $1 AND id != $2', [username, req.userId]);
+            const existing = existingResult.rows[0];
             if (existing) {
                 return res.status(409).json({
                     error: {
@@ -124,35 +135,38 @@ const updateMe = async (req, res) => {
         // Build update query
         const updateFields = [];
         const updateParams = [];
+        let paramIndex = 1;
         if (username !== undefined) {
-            updateFields.push('username = ?');
+            updateFields.push(`username = $${paramIndex}`);
             updateParams.push(username);
+            paramIndex++;
         }
         if (bio !== undefined) {
-            updateFields.push('bio = ?');
+            updateFields.push(`bio = $${paramIndex}`);
             updateParams.push(bio);
+            paramIndex++;
         }
         if (avatarUrl !== undefined) {
-            updateFields.push('avatar_url = ?');
+            updateFields.push(`avatar_url = $${paramIndex}`);
             updateParams.push(avatarUrl);
+            paramIndex++;
         }
         if (updateFields.length > 0) {
             updateFields.push('updated_at = CURRENT_TIMESTAMP');
-            const updateSql = `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`;
+            const updateSql = `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
             updateParams.push(req.userId);
-            const updateStmt = sqlite_1.default.prepare(updateSql);
-            updateStmt.run(...updateParams);
+            await postgres_1.pool.query(updateSql, updateParams);
         }
         // Get updated user
-        const userStmt = sqlite_1.default.prepare(`
+        const userResult = await postgres_1.pool.query(`
       SELECT id, username, email, region, civic_points, bio, avatar_url
-      FROM users WHERE id = ?
-    `);
-        const updated = userStmt.get(req.userId);
+      FROM users WHERE id = $1
+    `, [req.userId]);
+        const updated = userResult.rows[0];
         // Parse region if exists
         const responseData = {
             ...updated,
-            region: updated.region ? JSON.parse(updated.region) : null,
+            region: parseRegion(updated.region),
             civicPoints: updated.civic_points,
             avatarUrl: updated.avatar_url
         };
@@ -170,11 +184,21 @@ exports.updateMe = updateMe;
 const getPublicProfile = async (req, res) => {
     try {
         const { id } = req.params;
-        const userStmt = sqlite_1.default.prepare(`
-      SELECT id, username, badges, civic_points, civic_level, region
-      FROM users WHERE id = ?
-    `);
-        const user = userStmt.get(id);
+        const userResult = await postgres_1.pool.query(`
+      SELECT 
+        id, 
+        username, 
+        badges, 
+        civic_points, 
+        civic_level, 
+        region,
+        bio,
+        avatar_url,
+        trust_score
+      FROM users 
+      WHERE id = $1
+    `, [id]);
+        const user = userResult.rows[0];
         if (!user) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'User not found' },
@@ -187,7 +211,10 @@ const getPublicProfile = async (req, res) => {
             badges: user.badges ? JSON.parse(user.badges) : [],
             civicPoints: user.civic_points,
             civicLevel: user.civic_level,
-            region: user.region ? JSON.parse(user.region) : null,
+            region: parseRegion(user.region),
+            bio: user.bio || null,
+            avatarUrl: user.avatar_url || null,
+            trustScore: user.trust_score ?? null,
         };
         return res.status(200).json(publicProfile);
     }
@@ -205,16 +232,16 @@ const getMyComments = async (req, res) => {
         const { limit = 20, offset = 0 } = req.query;
         const userId = req.userId;
         // Get comments by user
-        const commentsStmt = sqlite_1.default.prepare(`
+        const commentsResult = await postgres_1.pool.query(`
       SELECT c.*, u.username, u.badges, r.id as report_id, r.title as report_title
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
       LEFT JOIN reports r ON c.report_id = r.id
-      WHERE c.author_id = ?
+      WHERE c.author_id = $1
       ORDER BY c.created_at DESC
-      LIMIT ? OFFSET ?
-    `);
-        const comments = commentsStmt.all(userId, parseInt(limit), parseInt(offset));
+      LIMIT $2 OFFSET $3
+    `, [userId, parseInt(limit), parseInt(offset)]);
+        const comments = commentsResult.rows;
         // Format comments
         const formattedComments = comments.map((comment) => ({
             id: comment.id,
@@ -231,9 +258,8 @@ const getMyComments = async (req, res) => {
             updated_at: comment.updated_at,
         }));
         // Get total count
-        const countStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM comments WHERE author_id = ?');
-        const countResult = countStmt.get(userId);
-        const total = countResult.count;
+        const countResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM comments WHERE author_id = $1', [userId]);
+        const total = parseInt(countResult.rows[0].count);
         return res.status(200).json({
             data: formattedComments,
             total,
@@ -289,14 +315,13 @@ const updateRegion = async (req, res) => {
                 },
             });
         }
-        const updateStmt = sqlite_1.default.prepare('UPDATE users SET region = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-        updateStmt.run(JSON.stringify(region), req.userId);
+        await postgres_1.pool.query('UPDATE users SET region = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(region), req.userId]);
         // Get updated user
-        const userStmt = sqlite_1.default.prepare('SELECT id, username, email, region FROM users WHERE id = ?');
-        const updated = userStmt.get(req.userId);
+        const userResult = await postgres_1.pool.query('SELECT id, username, email, region FROM users WHERE id = $1', [req.userId]);
+        const updated = userResult.rows[0];
         const responseData = {
             ...updated,
-            region: updated.region ? JSON.parse(updated.region) : null
+            region: parseRegion(updated.region)
         };
         return res.status(200).json(responseData);
     }

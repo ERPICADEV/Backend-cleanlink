@@ -6,13 +6,12 @@ import {
   createReward, 
   updateReward, 
   deleteReward 
-} from '../controllers/rewardController-sqlite';
+} from '../controllers/rewardController';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware, requirePermission } from '../middleware/adminMiddleware';
 
 const router = Router();
 
-// SQLite endpoints
 // Public endpoint - returns only available rewards
 router.get('/', getRewards);
 // Admin endpoint - returns all rewards (including unavailable)

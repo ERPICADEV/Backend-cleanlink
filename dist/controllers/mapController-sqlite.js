@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getMapStats = exports.getMapClusters = exports.getMapReports = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 // GET /api/v1/map/reports
 const getMapReports = async (req, res) => {
     try {
@@ -12,20 +9,22 @@ const getMapReports = async (req, res) => {
         category, status, limit = 100 } = req.query;
         let whereClause = 'WHERE 1=1';
         const params = [];
+        let paramIndex = 1;
         // Filter by category
         if (typeof category === 'string' && category.trim()) {
-            whereClause += ' AND LOWER(category) = LOWER(?)';
+            whereClause += ` AND LOWER(category) = LOWER($${paramIndex})`;
             params.push(category.trim());
+            paramIndex++;
         }
         // Filter by status
         if (typeof status === 'string' && status.trim()) {
-            whereClause += ' AND LOWER(status) = LOWER(?)';
+            whereClause += ` AND LOWER(status) = LOWER($${paramIndex})`;
             params.push(status.trim());
+            paramIndex++;
         }
         // Basic bounds filtering
         if (bounds) {
             const [southWestLat, southWestLng, northEastLat, northEastLng] = bounds.split(',').map(parseFloat);
-            console.log(`Map bounds: ${southWestLat},${southWestLng} to ${northEastLat},${northEastLng}`);
         }
         const sql = `
       SELECT 
@@ -34,11 +33,11 @@ const getMapReports = async (req, res) => {
       FROM reports 
       ${whereClause}
       ORDER BY created_at DESC
-      LIMIT ?
+      LIMIT $${paramIndex}
     `;
         params.push(parseInt(limit));
-        const stmt = sqlite_1.default.prepare(sql);
-        const reports = stmt.all(...params);
+        const result = await postgres_1.pool.query(sql, params);
+        const reports = result.rows;
         // Format for map consumption
         const mapData = reports.map(report => {
             const location = report.location ? JSON.parse(report.location) : {};
@@ -86,12 +85,12 @@ const getMapClusters = async (req, res) => {
     try {
         const { zoom, bounds } = req.query;
         // Simple clustering - get reports
-        const reportsStmt = sqlite_1.default.prepare(`
+        const reportsResult = await postgres_1.pool.query(`
       SELECT id, location, category, status 
       FROM reports 
       LIMIT 500
     `);
-        const reports = reportsStmt.all();
+        const reports = reportsResult.rows;
         // Simple clustering by rounding coordinates
         const clusterZoom = parseInt(zoom) || 10;
         const precision = Math.pow(10, Math.floor(clusterZoom / 3));
@@ -146,15 +145,15 @@ exports.getMapClusters = getMapClusters;
 const getMapStats = async (req, res) => {
     try {
         // Get category and status stats
-        const categoryStatsStmt = sqlite_1.default.prepare(`
+        const categoryStatsResult = await postgres_1.pool.query(`
       SELECT category, status, COUNT(*) as count 
       FROM reports 
       GROUP BY category, status
     `);
-        const categoryStats = categoryStatsStmt.all();
+        const categoryStats = categoryStatsResult.rows;
         // Fetch reports for location stats
-        const reportsStmt = sqlite_1.default.prepare('SELECT location FROM reports');
-        const reports = reportsStmt.all();
+        const reportsResult = await postgres_1.pool.query('SELECT location FROM reports');
+        const reports = reportsResult.rows;
         // Manual aggregation for location stats
         const areaMap = {};
         reports.forEach(report => {

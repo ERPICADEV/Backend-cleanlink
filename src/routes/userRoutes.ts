@@ -6,12 +6,11 @@ import {
   getRegions, 
   updateRegion,
   getMyComments
-} from '../controllers/userController-sqlite';
+} from '../controllers/userController';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-// SQLite endpoints
 router.get('/me', authMiddleware, getMe);
 router.patch('/me', authMiddleware, updateMe);
 router.get('/me/comments', authMiddleware, getMyComments);

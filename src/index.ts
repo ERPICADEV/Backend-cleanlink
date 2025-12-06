@@ -1,12 +1,15 @@
+// Load environment variables FIRST before any other imports
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import redis from './config/redis';
 import { authMiddleware } from './middleware/auth';
 import { adminMiddleware } from './middleware/adminRoles';
 import { getRolePermissions } from './lib/permissions';
-// Import SQLite routes
+// Import routes
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import reportRoutes from './routes/reportRoutes';
@@ -18,10 +21,23 @@ import aiRoutes from './routes/aiRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import mapRoutes from './routes/mapRoutes';
 
-import './utils/queue';
-import db from './config/sqlite'
+// Check critical environment variables
+if (!process.env.DATABASE_URL) {
+  console.warn('⚠️  WARNING: DATABASE_URL is not set in environment variables');
+}
 
-dotenv.config();
+// Import after dotenv.config() to ensure env vars are loaded
+import './utils/queue';
+import { pool } from './config/postgres';
+
+// Add error handlers for database connection
+pool.on('error', (err) => {
+  console.error('❌ Unexpected PostgreSQL pool error:', err);
+});
+
+pool.on('connect', () => {
+  console.log('✅ PostgreSQL connected');
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,7 +47,7 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// SQLite Routes ONLY
+// API Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/reports', reportRoutes);
@@ -62,11 +78,11 @@ app.get('/api/v1', (req, res) => {
   });
 });
 
-// Health check (SQLite only)
+// Health check
 app.get('/health', async (req, res) => {
   try {
-    // Test SQLite connection
-    db.prepare('SELECT 1').get();
+    // Test PostgreSQL connection
+    await pool.query('SELECT 1');
     
     // Test Redis connection
     await redis.ping();
@@ -74,7 +90,7 @@ app.get('/health', async (req, res) => {
     res.json({ 
       status: 'ok', 
       service: 'cleanlink-api',
-      database: 'connected (SQLite)',
+      database: 'connected (PostgreSQL)',
       redis: 'connected'
     });
   } catch (error) {
@@ -85,23 +101,6 @@ app.get('/health', async (req, res) => {
     });
   }
 });
-
-// SQLite test endpoints
-app.get('/sqlite-reports', (req, res) => {
-  try {
-    const stmt = db.prepare('SELECT id, title, upvotes, downvotes FROM reports LIMIT 10')
-    const reports = stmt.all()
-    
-    res.json({
-      data: reports,
-      count: reports.length,
-      message: 'Reports from SQLite database'
-    })
-  } catch (error: any) {
-    res.status(500).json({ error: error.message })
-  }
-})
-
 
 // Test endpoint - add after other routes
 app.get('/test-permissions', authMiddleware, adminMiddleware, (req, res) => {
@@ -116,37 +115,24 @@ app.get('/test-permissions', authMiddleware, adminMiddleware, (req, res) => {
 
 
 // Debug endpoint to see all admins
-app.get('/debug/admins', authMiddleware, adminMiddleware, (req, res) => {
-  const stmt = db.prepare(`
-    SELECT 
-      a.id as admin_id,
-      a.user_id,
-      a.role,
-      a.status,
-      u.email,
-      u.username
-    FROM admins a
-    JOIN users u ON a.user_id = u.id
-  `);
-  const admins = stmt.all();
-  res.json(admins);
-});
-
-app.get('/sqlite-reports/:id', (req, res) => {
+app.get('/debug/admins', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const { id } = req.params
-    const stmt = db.prepare('SELECT * FROM reports WHERE id = ?')
-    const report: any = stmt.get(id)
-    
-    if (!report) {
-      return res.status(404).json({ error: 'Report not found' })
-    }
-    
-    res.json(report)
+    const result = await pool.query(`
+      SELECT 
+        a.id as admin_id,
+        a.user_id,
+        a.role,
+        a.status,
+        u.email,
+        u.username
+      FROM admins a
+      JOIN users u ON a.user_id = u.id
+    `);
+    res.json(result.rows);
   } catch (error: any) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ error: error.message });
   }
-})
+});
 
 // Debug routes
 app.get('/debug/queue-status', async (req, res) => {
@@ -202,5 +188,7 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  // Server started
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 Health check: http://localhost:${PORT}/health`);
+  console.log(`📚 API: http://localhost:${PORT}/api/v1`);
 });

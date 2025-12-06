@@ -41,8 +41,6 @@ const redis_1 = __importDefault(require("../config/redis"));
 const enqueueAIAnalysis = async (reportId) => {
     try {
         await redis_1.default.lpush('ai_processing_queue', reportId);
-        console.log(`✅ Queued report ${reportId} for AI analysis`);
-        console.log(`📊 Queue length: ${await redis_1.default.llen('ai_processing_queue')}`);
     }
     catch (error) {
         console.error('❌ Failed to queue AI analysis:', error);
@@ -53,11 +51,8 @@ const processAIQueue = async () => {
     try {
         const reportId = await redis_1.default.rpop('ai_processing_queue');
         if (reportId) {
-            console.log(`🎯 Processing queued report: ${reportId}`);
             const { processReportWithAI } = await Promise.resolve().then(() => __importStar(require('../workers/aiWorker')));
             await processReportWithAI(reportId);
-        }
-        else {
         }
     }
     catch (error) {
@@ -66,5 +61,4 @@ const processAIQueue = async () => {
 };
 exports.processAIQueue = processAIQueue;
 // Start queue processor
-console.log('🚀 AI Queue processor started');
 setInterval(exports.processAIQueue, 10000);

@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateReport = exports.getReport = exports.createReport = exports.getReports = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const queue_1 = require("../utils/queue");
 // GET /api/v1/reports (feed)
@@ -14,17 +11,21 @@ const getReports = async (req, res) => {
         // Build WHERE clause
         let whereClause = 'WHERE 1=1';
         const params = [];
+        let paramIndex = 1;
         if (typeof category === 'string' && category.trim()) {
-            whereClause += ' AND LOWER(category) = LOWER(?)';
+            whereClause += ` AND LOWER(category) = LOWER($${paramIndex})`;
             params.push(category.trim());
+            paramIndex++;
         }
         if (typeof status === 'string' && status.trim()) {
-            whereClause += ' AND LOWER(status) = LOWER(?)';
+            whereClause += ` AND LOWER(status) = LOWER($${paramIndex})`;
             params.push(status.trim());
+            paramIndex++;
         }
         if (typeof reporter_id === 'string' && reporter_id.trim()) {
-            whereClause += ' AND reporter_id = ?';
+            whereClause += ` AND reporter_id = $${paramIndex}`;
             params.push(reporter_id.trim());
+            paramIndex++;
         }
         // Build ORDER BY
         let orderBy = 'ORDER BY created_at DESC';
@@ -45,11 +46,26 @@ const getReports = async (req, res) => {
       FROM reports 
       ${whereClause}
       ${orderBy}
-      LIMIT ?
+      LIMIT $${paramIndex}
     `;
         params.push(parseInt(limit));
-        const stmt = sqlite_1.default.prepare(sql);
-        const reports = stmt.all(...params);
+        const result = await postgres_1.pool.query(sql, params);
+        const reports = result.rows;
+        // Get user votes for all reports if authenticated
+        let userVotes = {};
+        if (req.userId) {
+            const reportIds = reports.map((r) => r.id);
+            if (reportIds.length > 0) {
+                const placeholders = reportIds.map((_, i) => `$${i + 1}`).join(',');
+                const userVoteResult = await postgres_1.pool.query(`
+          SELECT report_id, value FROM votes 
+          WHERE report_id IN (${placeholders}) AND user_id = $${reportIds.length + 1}
+        `, [...reportIds, req.userId]);
+                userVoteResult.rows.forEach((vote) => {
+                    userVotes[vote.report_id] = vote.value;
+                });
+            }
+        }
         // Mask coordinates for public feed
         const maskedReports = reports.map((report) => {
             const reportData = { ...report };
@@ -79,7 +95,8 @@ const getReports = async (req, res) => {
                 ...reportData,
                 aiScore, // Convert snake_case to camelCase for frontend
                 createdAt: reportData.created_at, // Convert snake_case to camelCase
-                description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : '')
+                description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
+                user_vote: userVotes[reportData.id] || 0
             };
             // Remove the snake_case versions from response
             delete result.ai_score;
@@ -106,20 +123,26 @@ const createReport = async (req, res) => {
         const reporterId = anonymous ? null : req.userId;
         const reporterDisplay = anonymous ? 'Anonymous' : req.userEmail || 'User';
         const reportId = (0, crypto_1.randomUUID)();
-        const insertStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO reports (
         id, title, description, category, images, location, visibility,
         reporter_id, reporter_display, community_score, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        insertStmt.run(reportId, title.trim(), description.trim(), category, JSON.stringify(images || []), JSON.stringify(location || {}), location?.visibility || 'public', reporterId, reporterDisplay, 0, // community_score
-        'pending' // status
-        );
-        console.log('✅ Report created:', reportId);
-        console.log('📋 Calling enqueueAIAnalysis...');
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+    `, [
+            reportId,
+            title.trim(),
+            description.trim(),
+            category,
+            JSON.stringify(images || []),
+            JSON.stringify(location || {}),
+            location?.visibility || 'public',
+            reporterId,
+            reporterDisplay,
+            0, // community_score
+            'pending' // status
+        ]);
         try {
             await (0, queue_1.enqueueAIAnalysis)(reportId);
-            console.log('🎯 AI queuing completed for report:', reportId);
         }
         catch (aiError) {
             console.error('❌ Failed to enqueue AI analysis:', aiError);
@@ -147,15 +170,12 @@ const getReport = async (req, res) => {
         // Check if user is admin (simplified)
         let isAdmin = false;
         if (req.userId) {
-            const adminStmt = sqlite_1.default.prepare('SELECT 1 FROM admins WHERE user_id = ?');
-            const admin = adminStmt.get(req.userId);
-            isAdmin = !!admin;
+            const adminResult = await postgres_1.pool.query('SELECT 1 FROM admins WHERE user_id = $1', [req.userId]);
+            isAdmin = !!adminResult.rows[0];
         }
         // Get report
-        const reportStmt = sqlite_1.default.prepare(`
-      SELECT * FROM reports WHERE id = ?
-    `);
-        const report = reportStmt.get(id);
+        const reportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -164,23 +184,23 @@ const getReport = async (req, res) => {
         // Get reporter info
         let reporter = null;
         if (report.reporter_id) {
-            const reporterStmt = sqlite_1.default.prepare(`
+            const reporterResult = await postgres_1.pool.query(`
         SELECT id, username, ${isAdmin ? 'email,' : ''} badges 
-        FROM users WHERE id = ?
-      `);
-            reporter = reporterStmt.get(report.reporter_id);
+        FROM users WHERE id = $1
+      `, [report.reporter_id]);
+            reporter = reporterResult.rows[0];
         }
         // Get comments with authors
-        const commentsStmt = sqlite_1.default.prepare(`
+        const commentsResult = await postgres_1.pool.query(`
       SELECT c.*, u.username, u.badges 
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
-      WHERE c.report_id = ? 
+      WHERE c.report_id = $1 
       ORDER BY c.created_at ASC
-    `);
-        const rawComments = commentsStmt.all(id);
+    `, [id]);
+        const rawComments = commentsResult.rows;
         // Format comments to match getComments endpoint structure
-        const formatComment = (comment) => {
+        const formatComment = async (comment) => {
             const formatted = {
                 id: comment.id,
                 text: comment.text,
@@ -194,25 +214,31 @@ const getReport = async (req, res) => {
                 updated_at: comment.updated_at,
             };
             // Get replies recursively
-            const repliesStmt = sqlite_1.default.prepare(`
+            const repliesResult = await postgres_1.pool.query(`
         SELECT c.*, u.username, u.badges 
         FROM comments c 
         LEFT JOIN users u ON c.author_id = u.id 
-        WHERE c.parent_comment_id = ?
+        WHERE c.parent_comment_id = $1
         ORDER BY c.created_at ASC
-      `);
-            const replies = repliesStmt.all(comment.id);
+      `, [comment.id]);
+            const replies = repliesResult.rows;
             if (replies.length > 0) {
-                formatted.replies = replies.map((reply) => formatComment(reply));
+                formatted.replies = await Promise.all(replies.map((reply) => formatComment(reply)));
             }
             return formatted;
         };
         // Get top-level comments (no parent) and format them
         const topLevelComments = rawComments.filter((c) => !c.parent_comment_id);
-        const comments = topLevelComments.map((comment) => formatComment(comment));
+        const comments = await Promise.all(topLevelComments.map((comment) => formatComment(comment)));
         // Get votes count
-        const votesStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM votes WHERE report_id = ?');
-        const votesCount = votesStmt.get(id);
+        const votesResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM votes WHERE report_id = $1', [id]);
+        const votesCount = votesResult.rows[0];
+        // Get user's vote if authenticated
+        let userVote = 0;
+        if (req.userId) {
+            const userVoteResult = await postgres_1.pool.query('SELECT value FROM votes WHERE report_id = $1 AND user_id = $2', [id, req.userId]);
+            userVote = userVoteResult.rows[0]?.value || 0;
+        }
         // Parse JSON fields
         let aiScore = null;
         try {
@@ -232,6 +258,7 @@ const getReport = async (req, res) => {
             updatedAt: report.updated_at, // Convert snake_case to camelCase
             reporter,
             comments,
+            user_vote: userVote,
             _count: {
                 votes: votesCount.count
             }
@@ -240,6 +267,29 @@ const getReport = async (req, res) => {
         delete responseReport.ai_score;
         delete responseReport.created_at;
         delete responseReport.updated_at;
+        // If the report has been worked on by admins, expose the latest
+        // resolution photos/details so they can be shown in the public feed.
+        const resolutionResult = await postgres_1.pool.query(`
+      SELECT photos, completion_details, submitted_at
+      FROM report_progress
+      WHERE report_id = $1
+      ORDER BY submitted_at DESC
+      LIMIT 1
+    `, [id]);
+        const latestProgress = resolutionResult.rows[0];
+        if (latestProgress) {
+            let resolutionPhotos = [];
+            try {
+                if (latestProgress.photos) {
+                    resolutionPhotos = JSON.parse(latestProgress.photos);
+                }
+            }
+            catch (e) {
+                console.error('Error parsing resolution photos:', e);
+            }
+            responseReport.resolutionPhotos = resolutionPhotos;
+            responseReport.resolutionDetails = latestProgress.completion_details || null;
+        }
         // Mask coordinates for non-admin users
         if (!isAdmin && report.visibility === 'masked' && responseReport.location) {
             const { lat, lng, ...restLocation } = responseReport.location;
@@ -267,13 +317,12 @@ const updateReport = async (req, res) => {
         // Check if user is admin
         let isAdmin = false;
         if (req.userId) {
-            const adminStmt = sqlite_1.default.prepare('SELECT 1 FROM admins WHERE user_id = ?');
-            const admin = adminStmt.get(req.userId);
-            isAdmin = !!admin;
+            const adminResult = await postgres_1.pool.query('SELECT 1 FROM admins WHERE user_id = $1', [req.userId]);
+            isAdmin = !!adminResult.rows[0];
         }
         // Get existing report
-        const getStmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const existingReport = getStmt.get(id);
+        const getResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+        const existingReport = getResult.rows[0];
         if (!existingReport) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -295,24 +344,25 @@ const updateReport = async (req, res) => {
         // Build update query
         const updateFields = [];
         const updateParams = [];
+        let paramIndex = 1;
         Object.keys(updates).forEach(key => {
             if (key === 'images' || key === 'location') {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(JSON.stringify(updates[key]));
             }
             else {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(updates[key]);
             }
+            paramIndex++;
         });
         updateFields.push('updated_at = CURRENT_TIMESTAMP');
-        const updateSql = `UPDATE reports SET ${updateFields.join(', ')} WHERE id = ?`;
+        const updateSql = `UPDATE reports SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
         updateParams.push(id);
-        const updateStmt = sqlite_1.default.prepare(updateSql);
-        updateStmt.run(...updateParams);
+        await postgres_1.pool.query(updateSql, updateParams);
         // Get updated report
-        const updatedReportStmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const updatedReport = updatedReportStmt.get(id);
+        const updatedReportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+        const updatedReport = updatedReportResult.rows[0];
         // Parse JSON fields
         if (updatedReport.images) {
             updatedReport.images = JSON.parse(updatedReport.images);

@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPendingAIReports = exports.updateAIResult = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 // POST /internal/ai/reports/:id/result - Internal AI service
 const updateAIResult = async (req, res) => {
@@ -21,15 +18,17 @@ const updateAIResult = async (req, res) => {
             });
         }
         // Check if report exists
-        const reportStmt = sqlite_1.default.prepare('SELECT id, status FROM reports WHERE id = ?');
-        const report = reportStmt.get(id);
+        const reportResult = await postgres_1.pool.query('SELECT id, status FROM reports WHERE id = $1', [id]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
             });
         }
         // Transaction for atomic operations
-        sqlite_1.default.transaction(() => {
+        const client = await postgres_1.pool.connect();
+        try {
+            await client.query('BEGIN');
             // Prepare AI score data
             const aiScoreData = {
                 legit: ai_score.legit,
@@ -41,9 +40,8 @@ const updateAIResult = async (req, res) => {
             let newStatus = report.status;
             // Handle duplicate detection
             if (duplicate_of) {
-                const duplicateStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
-                const duplicateReport = duplicateStmt.get(duplicate_of);
-                if (duplicateReport) {
+                const duplicateResult = await client.query('SELECT id FROM reports WHERE id = $1', [duplicate_of]);
+                if (duplicateResult.rows[0]) {
                     newStatus = 'duplicate';
                 }
             }
@@ -55,27 +53,44 @@ const updateAIResult = async (req, res) => {
                 newStatus = 'community_verified';
             }
             // Update the report
-            const updateStmt = sqlite_1.default.prepare(`
+            await client.query(`
         UPDATE reports 
-        SET ai_score = ?, status = ?, duplicate_of = ?, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = ?
-      `);
-            updateStmt.run(JSON.stringify(aiScoreData), newStatus, duplicate_of || null, id);
+        SET ai_score = $1, status = $2, duplicate_of = $3, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $4
+      `, [
+                JSON.stringify(aiScoreData),
+                newStatus,
+                duplicate_of || null,
+                id
+            ]);
             // Create audit log
             const auditLogId = (0, crypto_1.randomUUID)();
-            const auditStmt = sqlite_1.default.prepare(`
+            await client.query(`
         INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
-            auditStmt.run(auditLogId, null, // System action
-            'AI_ANALYSIS_COMPLETE', 'REPORT', id, JSON.stringify({
-                ai_score: ai_score.legit,
-                severity: ai_score.severity,
-                duplicate_of: duplicate_of,
-                new_status: newStatus,
-                insights: insights || [],
-            }));
-        })();
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      `, [
+                auditLogId,
+                null, // System action
+                'AI_ANALYSIS_COMPLETE',
+                'REPORT',
+                id,
+                JSON.stringify({
+                    ai_score: ai_score.legit,
+                    severity: ai_score.severity,
+                    duplicate_of: duplicate_of,
+                    new_status: newStatus,
+                    insights: insights || [],
+                })
+            ]);
+            await client.query('COMMIT');
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
         return res.status(200).json({
             message: 'AI results updated successfully',
             report_id: id,
@@ -95,14 +110,14 @@ const getPendingAIReports = async (req, res) => {
     try {
         const { limit = 10 } = req.query;
         // Get pending reports
-        const pendingStmt = sqlite_1.default.prepare(`
+        const pendingResult = await postgres_1.pool.query(`
       SELECT id, title, description, images, location, category, created_at, ai_score
       FROM reports 
       WHERE status = 'pending'
       ORDER BY created_at ASC
-      LIMIT ?
-    `);
-        const allPendingReports = pendingStmt.all(parseInt(limit) * 2);
+      LIMIT $1
+    `, [parseInt(limit) * 2]);
+        const allPendingReports = pendingResult.rows;
         // Filter reports that haven't been processed by AI
         const pendingReports = allPendingReports.filter((report) => {
             // No AI score at all

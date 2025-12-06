@@ -9,7 +9,6 @@ const withRetry = async (operation, maxRetries = 3, delayMs = 1000) => {
         catch (error) {
             if (attempt === maxRetries)
                 throw error;
-            console.log(`🔄 Database retry ${attempt}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
         }
     }

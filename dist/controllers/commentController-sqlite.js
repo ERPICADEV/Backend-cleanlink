@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteComment = exports.updateComment = exports.getComments = exports.createComment = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const notificationService_1 = require("../services/notificationService");
 // POST /api/v1/reports/:id/comments
@@ -23,8 +20,8 @@ const createComment = async (req, res) => {
             });
         }
         // Check if report exists and get owner
-        const reportStmt = sqlite_1.default.prepare('SELECT id, reporter_id, title FROM reports WHERE id = ?');
-        const report = reportStmt.get(reportId);
+        const reportResult = await postgres_1.pool.query('SELECT id, reporter_id, title FROM reports WHERE id = $1', [reportId]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -32,8 +29,8 @@ const createComment = async (req, res) => {
         }
         // Check if parent comment exists and belongs to same report (if provided)
         if (parent_comment_id) {
-            const parentStmt = sqlite_1.default.prepare('SELECT id FROM comments WHERE id = ? AND report_id = ?');
-            const parentComment = parentStmt.get(parent_comment_id, reportId);
+            const parentResult = await postgres_1.pool.query('SELECT id FROM comments WHERE id = $1 AND report_id = $2', [parent_comment_id, reportId]);
+            const parentComment = parentResult.rows[0];
             if (!parentComment) {
                 return res.status(404).json({
                     error: { code: 'NOT_FOUND', message: 'Parent comment not found for this report' },
@@ -41,12 +38,11 @@ const createComment = async (req, res) => {
             }
         }
         // Basic anti-spam: Check for recent comments from same user
-        const recentStmt = sqlite_1.default.prepare(`
+        const recentResult = await postgres_1.pool.query(`
       SELECT COUNT(*) as count FROM comments 
-      WHERE author_id = ? AND created_at >= datetime('now', '-1 minute')
-    `);
-        const recentResult = recentStmt.get(req.userId);
-        const recentComments = recentResult.count;
+      WHERE author_id = $1 AND created_at >= NOW() - INTERVAL '1 minute'
+    `, [req.userId]);
+        const recentComments = parseInt(recentResult.rows[0].count);
         if (recentComments >= 5) {
             return res.status(429).json({
                 error: {
@@ -57,19 +53,28 @@ const createComment = async (req, res) => {
         }
         // Create comment
         const commentId = (0, crypto_1.randomUUID)();
-        const insertStmt = sqlite_1.default.prepare(`
+        // Use UTC timestamp to avoid timezone issues
+        const now = new Date().toISOString();
+        await postgres_1.pool.query(`
       INSERT INTO comments (id, report_id, author_id, text, parent_comment_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `);
-        insertStmt.run(commentId, reportId, req.userId, text.trim(), parent_comment_id || null);
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+            commentId,
+            reportId,
+            req.userId,
+            text.trim(),
+            parent_comment_id || null,
+            now,
+            now
+        ]);
         // Get created comment with author info
-        const commentStmt = sqlite_1.default.prepare(`
+        const commentResult = await postgres_1.pool.query(`
       SELECT c.*, u.username, u.badges 
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
-      WHERE c.id = ?
-    `);
-        const comment = commentStmt.get(commentId);
+      WHERE c.id = $1
+    `, [commentId]);
+        const comment = commentResult.rows[0];
         // Fire-and-forget notification to report owner (if not self-comment)
         if (report.reporter_id && report.reporter_id !== req.userId) {
             const snippet = comment.text && comment.text.length > 80
@@ -86,6 +91,9 @@ const createComment = async (req, res) => {
                 badges: comment.badges ? JSON.parse(comment.badges) : [],
             },
             parent_comment_id: comment.parent_comment_id,
+            upvotes: comment.upvotes || 0,
+            downvotes: comment.downvotes || 0,
+            user_vote: 0,
             created_at: comment.created_at,
             updated_at: comment.updated_at,
         });
@@ -103,26 +111,33 @@ const getComments = async (req, res) => {
     try {
         const { id: reportId } = req.params;
         const { limit = 20, include_replies = 'true' } = req.query;
+        const userId = req.userId || null; // Optional user ID for vote status
         // Check if report exists
-        const reportStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
-        const report = reportStmt.get(reportId);
+        const reportResult = await postgres_1.pool.query('SELECT id FROM reports WHERE id = $1', [reportId]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
             });
         }
         // Get top-level comments (no parent)
-        const commentsStmt = sqlite_1.default.prepare(`
+        const commentsResult = await postgres_1.pool.query(`
       SELECT c.*, u.username, u.badges 
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
-      WHERE c.report_id = ? AND c.parent_comment_id IS NULL
+      WHERE c.report_id = $1 AND c.parent_comment_id IS NULL
       ORDER BY c.created_at ASC
-      LIMIT ?
-    `);
-        const comments = commentsStmt.all(reportId, parseInt(limit));
+      LIMIT $2
+    `, [reportId, parseInt(limit)]);
+        const comments = commentsResult.rows;
         // Format comments
-        const formatComment = (comment) => {
+        const formatComment = async (comment) => {
+            // Get user's vote for this comment if authenticated
+            let userVote = 0;
+            if (userId) {
+                const voteResult = await postgres_1.pool.query('SELECT value FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [comment.id, userId]);
+                userVote = voteResult.rows[0]?.value || 0;
+            }
             const formatted = {
                 id: comment.id,
                 text: comment.text,
@@ -132,26 +147,29 @@ const getComments = async (req, res) => {
                     badges: comment.badges ? JSON.parse(comment.badges) : [],
                 },
                 parent_comment_id: comment.parent_comment_id,
+                upvotes: comment.upvotes || 0,
+                downvotes: comment.downvotes || 0,
+                user_vote: userVote,
                 created_at: comment.created_at,
                 updated_at: comment.updated_at,
             };
             // Get replies if requested
             if (include_replies === 'true') {
-                const repliesStmt = sqlite_1.default.prepare(`
+                const repliesResult = await postgres_1.pool.query(`
           SELECT c.*, u.username, u.badges 
           FROM comments c 
           LEFT JOIN users u ON c.author_id = u.id 
-          WHERE c.parent_comment_id = ?
+          WHERE c.parent_comment_id = $1
           ORDER BY c.created_at ASC
-        `);
-                const replies = repliesStmt.all(comment.id);
+        `, [comment.id]);
+                const replies = repliesResult.rows;
                 if (replies.length > 0) {
-                    formatted.replies = replies.map((reply) => formatComment(reply));
+                    formatted.replies = await Promise.all(replies.map((reply) => formatComment(reply)));
                 }
             }
             return formatted;
         };
-        const formattedComments = comments.map((comment) => formatComment(comment));
+        const formattedComments = await Promise.all(comments.map((comment) => formatComment(comment)));
         return res.status(200).json({
             data: formattedComments,
             paging: null, // Simplified pagination
@@ -181,24 +199,29 @@ const updateComment = async (req, res) => {
             });
         }
         // Update comment
-        const updateStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE comments 
-      SET text = ?, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `);
-        updateStmt.run(text.trim(), id);
+      SET text = $1, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $2
+    `, [text.trim(), id]);
         // Get updated comment with author info
-        const commentStmt = sqlite_1.default.prepare(`
+        const commentResult = await postgres_1.pool.query(`
       SELECT c.*, u.username, u.badges 
       FROM comments c 
       LEFT JOIN users u ON c.author_id = u.id 
-      WHERE c.id = ?
-    `);
-        const updatedComment = commentStmt.get(id);
+      WHERE c.id = $1
+    `, [id]);
+        const updatedComment = commentResult.rows[0];
         if (!updatedComment) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Comment not found' },
             });
+        }
+        // Get user's vote for this comment if authenticated
+        let userVote = 0;
+        if (req.userId) {
+            const voteResult = await postgres_1.pool.query('SELECT value FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [id, req.userId]);
+            userVote = voteResult.rows[0]?.value || 0;
         }
         return res.status(200).json({
             id: updatedComment.id,
@@ -209,6 +232,9 @@ const updateComment = async (req, res) => {
                 badges: updatedComment.badges ? JSON.parse(updatedComment.badges) : [],
             },
             parent_comment_id: updatedComment.parent_comment_id,
+            upvotes: updatedComment.upvotes || 0,
+            downvotes: updatedComment.downvotes || 0,
+            user_vote: userVote,
             created_at: updatedComment.created_at,
             updated_at: updatedComment.updated_at,
         });
@@ -225,9 +251,8 @@ exports.updateComment = updateComment;
 const deleteComment = async (req, res) => {
     try {
         const { id } = req.params;
-        const deleteStmt = sqlite_1.default.prepare('DELETE FROM comments WHERE id = ?');
-        const result = deleteStmt.run(id);
-        if (result.changes === 0) {
+        const result = await postgres_1.pool.query('DELETE FROM comments WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Comment not found' },
             });

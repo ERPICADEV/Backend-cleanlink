@@ -1,4 +1,4 @@
-import db from '../config/sqlite';
+import { pool } from '../config/postgres';
 import { randomUUID } from 'crypto';
 
 export interface NotificationData {
@@ -20,20 +20,18 @@ export class NotificationService {
   ) {
     try {
       const id = randomUUID();
-      const stmt = db.prepare(
-        // Column names must match SQLite schema (config/sqlite.ts)
-        'INSERT INTO notifications (id, user_id, type, title, message, data, created_at, is_read) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      );
-      
-      const result = stmt.run(
-        id,
-        userId,
-        type,
-        title,
-        message,
-        JSON.stringify(data || {}),
-        new Date().toISOString(),
-        0 // SQLite boolean: 0 = false, 1 = true
+      await pool.query(
+        'INSERT INTO notifications (id, user_id, type, title, message, data, created_at, is_read) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [
+          id,
+          userId,
+          type,
+          title,
+          message,
+          JSON.stringify(data || {}),
+          new Date().toISOString(),
+          false // PostgreSQL boolean
+        ]
       );
       
       return { id, userId, type, title, message, data: data || {} };

@@ -12,13 +12,11 @@ const db = new better_sqlite3_1.default('cleanlink.db');
 async function createAdmin(params) {
     const { email, password, username, role, region } = params;
     try {
-        console.log(`\n🔨 Creating ${role} user...`);
         // 1. Check if user already exists
         const checkUserStmt = db.prepare('SELECT id FROM users WHERE email = ?');
         let user = checkUserStmt.get(email.toLowerCase());
         let userId;
         if (user) {
-            console.log(`✅ User already exists: ${email}`);
             userId = user.id;
         }
         else {
@@ -36,7 +34,6 @@ async function createAdmin(params) {
             0.5, // trust_score
             'active' // status
             );
-            console.log(`✅ User created: ${email} (ID: ${userId})`);
         }
         // 3. Check if admin record exists
         const checkAdminStmt = db.prepare('SELECT id, role FROM admins WHERE user_id = ?');
@@ -49,7 +46,6 @@ async function createAdmin(params) {
         WHERE user_id = ?
       `);
             updateAdminStmt.run(role, region || null, userId);
-            console.log(`✅ Admin role updated: ${existingAdmin.role} → ${role}`);
         }
         else {
             // Create new admin record
@@ -59,7 +55,6 @@ async function createAdmin(params) {
         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `);
             insertAdminStmt.run(adminId, userId, region || null, role);
-            console.log(`✅ Admin record created with role: ${role}`);
         }
         // 4. Verify creation
         const verifyStmt = db.prepare(`
@@ -71,14 +66,6 @@ async function createAdmin(params) {
       WHERE u.id = ?
     `);
         const admin = verifyStmt.get(userId);
-        console.log('\n📋 Admin Details:');
-        console.log(`   Email: ${admin.email}`);
-        console.log(`   Username: ${admin.username}`);
-        console.log(`   User ID: ${admin.id}`);
-        console.log(`   Admin ID: ${admin.admin_id}`);
-        console.log(`   Role: ${admin.role}`);
-        console.log(`   Status: ${admin.status}`);
-        console.log('\n✅ Admin created successfully!\n');
         return admin;
     }
     catch (error) {

@@ -3,11 +3,10 @@ import {
   signup, 
   login, 
   refreshTokenHandler 
-} from '../controllers/authController-sqlite';
+} from '../controllers/authController';
 
 const router = Router();
 
-// SQLite endpoints
 router.post('/signup', signup);
 router.post('/login', login);
 router.post('/refresh', refreshTokenHandler);

@@ -1,4 +1,4 @@
-import db from '../config/sqlite'
+import { pool } from '../config/postgres'
 
 export interface DuplicateCheckResult {
   isDuplicate: boolean
@@ -19,7 +19,7 @@ export const checkForDuplicates = async (
     // Check for nearby reports within 200 meters in last 30 days
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     
-    const stmt = db.prepare(`
+    const result = await pool.query(`
       SELECT 
         id, 
         title, 
@@ -27,14 +27,14 @@ export const checkForDuplicates = async (
         location, 
         category, 
         images,
-        createdAt
+        created_at as "createdAt"
       FROM reports
-      WHERE id != ? 
-        AND createdAt >= ?
+      WHERE id != $1 
+        AND created_at >= $2
         AND status != 'duplicate'
-    `)
+    `, [reportId, thirtyDaysAgo])
     
-    const nearbyReports = stmt.all(reportId, thirtyDaysAgo) as any[]
+    const nearbyReports = result.rows as any[]
 
     // Simple distance calculation (Haversine would be better for production)
     const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {

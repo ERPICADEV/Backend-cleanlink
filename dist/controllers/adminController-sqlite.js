@@ -1,12 +1,9 @@
 "use strict";
 // src/controllers/adminController-sqlite.ts
 // 🔄 UPDATED WITH ROLE-BASED PERMISSIONS
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rejectReportWork = exports.approveReportWork = exports.getPendingApprovals = exports.submitForApproval = exports.updateReportProgress = exports.getAssignedReports = exports.getAdminStats = exports.getAdminUsers = exports.getReportAuditLogs = exports.resolveReport = exports.assignReport = exports.getAdminReports = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const levelConfig_1 = require("../utils/levelConfig");
 const notificationService_1 = require("../services/notificationService");
@@ -53,17 +50,26 @@ const getAdminReports = async (req, res) => {
       SELECT 
         r.*,
         u.username, u.email, u.phone, u.region as user_region,
+        rp.admin_id as assigned_to,
+        assigned_admin.username as assigned_admin_name,
+        assigned_admin.email as assigned_admin_email,
         (SELECT COUNT(*) FROM comments c WHERE c.report_id = r.id) as comments_count,
         (SELECT COUNT(*) FROM votes v WHERE v.report_id = r.id) as votes_count
       FROM reports r
       LEFT JOIN users u ON r.reporter_id = u.id
+      LEFT JOIN report_progress rp ON r.id = rp.report_id
+      LEFT JOIN admins a ON rp.admin_id = a.id
+      LEFT JOIN users assigned_admin ON a.user_id = assigned_admin.id
       ${whereClause}
       ${orderBy}
       LIMIT ?
     `;
         params.push(parseInt(limit));
-        const stmt = sqlite_1.default.prepare(sql);
-        const reports = stmt.all(...params);
+        // Convert ? placeholders to $1, $2, etc. for PostgreSQL
+        let paramIndex = 1;
+        const convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+        const result = await postgres_1.pool.query(convertedSql, params);
+        const reports = result.rows;
         const formattedReports = reports.map(report => {
             let aiScore = null;
             try {
@@ -84,13 +90,23 @@ const getAdminReports = async (req, res) => {
                 downvotes: report.downvotes,
                 community_score: report.community_score,
                 created_at: report.created_at,
+                mcd_verified_by: report.mcd_verified_by,
+                assigned_to: report.assigned_to,
+                assignedToName: report.assigned_admin_name || null,
                 aiScore,
                 reporter: report.reporter_id ? {
                     id: report.reporter_id,
                     username: report.username,
                     email: report.email,
                     phone: report.phone,
-                    region: report.user_region ? JSON.parse(report.user_region) : null,
+                    region: report.user_region ? (() => {
+                        try {
+                            return JSON.parse(report.user_region);
+                        }
+                        catch {
+                            return report.user_region;
+                        }
+                    })() : null,
                 } : null,
                 comments_count: report.comments_count,
                 votes_count: report.votes_count,
@@ -130,61 +146,64 @@ const assignReport = async (req, res) => {
             });
         }
         // Check if report exists
-        const reportStmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const report = reportStmt.get(id);
+        const reportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
             });
         }
         // Verify assigned_to admin exists
-        const adminStmt = sqlite_1.default.prepare('SELECT id FROM admins WHERE id = ?');
-        const targetAdmin = adminStmt.get(assigned_to);
+        const adminResult = await postgres_1.pool.query('SELECT id FROM admins WHERE id = $1', [assigned_to]);
+        const targetAdmin = adminResult.rows[0];
         if (!targetAdmin) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Target admin not found' },
             });
         }
         // 🆕 Create or update report_progress entry
-        const progressCheckStmt = sqlite_1.default.prepare('SELECT id FROM report_progress WHERE report_id = ?');
-        const existingProgress = progressCheckStmt.get(id);
+        const progressCheckResult = await postgres_1.pool.query('SELECT id FROM report_progress WHERE report_id = $1', [id]);
+        const existingProgress = progressCheckResult.rows[0];
         if (existingProgress) {
             // Update existing assignment
-            const updateProgressStmt = sqlite_1.default.prepare(`
+            await postgres_1.pool.query(`
         UPDATE report_progress 
-        SET admin_id = ?, notes = ?, updated_at = CURRENT_TIMESTAMP 
-        WHERE report_id = ?
-      `);
-            updateProgressStmt.run(assigned_to, notes || '', id);
+        SET admin_id = $1, notes = $2, updated_at = CURRENT_TIMESTAMP 
+        WHERE report_id = $3
+      `, [assigned_to, notes || '', id]);
         }
         else {
             // Create new assignment
-            const createProgressStmt = sqlite_1.default.prepare(`
+            await postgres_1.pool.query(`
         INSERT INTO report_progress (id, report_id, admin_id, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `);
-            createProgressStmt.run((0, crypto_1.randomUUID)(), id, assigned_to, notes || '');
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [(0, crypto_1.randomUUID)(), id, assigned_to, notes || '']);
         }
         // Update report status
-        const updateStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE reports 
-      SET status = 'assigned', mcd_verified_by = ?, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `);
-        updateStmt.run(req.userId, id);
+      SET status = 'assigned', mcd_verified_by = $1, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $2
+    `, [req.userId, id]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'REPORT_ASSIGNED', 'REPORT', id, JSON.stringify({
-            assigned_to,
-            notes: notes || '',
-            previous_status: report.status,
-            new_status: 'assigned',
-            assigned_by: req.userId,
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'REPORT_ASSIGNED',
+            'REPORT',
+            id,
+            JSON.stringify({
+                assigned_to,
+                notes: notes || '',
+                previous_status: report.status,
+                new_status: 'assigned',
+                assigned_by: req.userId,
+            })
+        ]);
         return res.status(200).json({
             id: id,
             status: 'assigned',
@@ -222,15 +241,15 @@ const resolveReport = async (req, res) => {
             });
         }
         // Get report with reporter info
-        const reportStmt = sqlite_1.default.prepare(`
+        const reportResult = await postgres_1.pool.query(`
       SELECT 
         r.*,
         u.civic_points, u.civic_level
       FROM reports r
       LEFT JOIN users u ON r.reporter_id = u.id
-      WHERE r.id = ?
-    `);
-        const report = reportStmt.get(id);
+      WHERE r.id = $1
+    `, [id]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -244,12 +263,14 @@ const resolveReport = async (req, res) => {
         //   })
         // }
         // Get comments count
-        const commentsStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM comments WHERE report_id = ?');
-        const commentsCount = commentsStmt.get(id);
+        const commentsResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM comments WHERE report_id = $1', [id]);
+        const commentsCount = { count: parseInt(commentsResult.rows[0].count) };
         let totalPoints = 0;
         let pointsBreakdown = {};
         // Transaction for atomic operations
-        sqlite_1.default.transaction(() => {
+        const client = await postgres_1.pool.connect();
+        try {
+            await client.query('BEGIN');
             // 1. Update report as resolved
             const mcdResolution = {
                 cleaned_image_url,
@@ -257,12 +278,15 @@ const resolveReport = async (req, res) => {
                 resolved_at: new Date().toISOString(),
                 resolved_by: req.userId,
             };
-            const updateReportStmt = sqlite_1.default.prepare(`
+            await client.query(`
         UPDATE reports 
-        SET status = 'resolved', mcd_verified_by = ?, mcd_resolution = ?, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = ?
-      `);
-            updateReportStmt.run(req.userId, JSON.stringify(mcdResolution), id);
+        SET status = 'resolved', mcd_verified_by = $1, mcd_resolution = $2, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $3
+      `, [
+                req.userId,
+                JSON.stringify(mcdResolution),
+                id
+            ]);
             // 2. Award civic points (only if non-anonymous reporter)
             if (report.reporter_id) {
                 const basePoints = 30;
@@ -287,25 +311,28 @@ const resolveReport = async (req, res) => {
                     resolution: resolutionBonus,
                     total: totalPoints,
                 };
-                const updateUserStmt = sqlite_1.default.prepare('UPDATE users SET civic_points = civic_points + ? WHERE id = ?');
-                updateUserStmt.run(totalPoints, report.reporter_id);
+                await client.query('UPDATE users SET civic_points = civic_points + $1 WHERE id = $2', [totalPoints, report.reporter_id]);
                 const newTotalPoints = (report.civic_points || 0) + totalPoints;
                 const previousLevel = report.civic_level || 1;
                 const newLevel = (0, levelConfig_1.calculateLevel)(newTotalPoints);
                 if (newLevel !== previousLevel) {
-                    const updateLevelStmt = sqlite_1.default.prepare('UPDATE users SET civic_level = ? WHERE id = ?');
-                    updateLevelStmt.run(newLevel, report.reporter_id);
-                    console.log(`🎉 User ${report.reporter_id} leveled up: ${previousLevel} → ${newLevel}`);
+                    await client.query('UPDATE users SET civic_level = $1 WHERE id = $2', [newLevel, report.reporter_id]);
                     const levelAuditId = (0, crypto_1.randomUUID)();
-                    const levelAuditStmt = sqlite_1.default.prepare(`
+                    await client.query(`
             INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-          `);
-                    levelAuditStmt.run(levelAuditId, req.userId, 'USER_LEVEL_UP', 'USER', report.reporter_id, JSON.stringify({
-                        old_level: previousLevel,
-                        new_level: newLevel,
-                        points: newTotalPoints,
-                    }));
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+          `, [
+                        levelAuditId,
+                        req.userId,
+                        'USER_LEVEL_UP',
+                        'USER',
+                        report.reporter_id,
+                        JSON.stringify({
+                            old_level: previousLevel,
+                            new_level: newLevel,
+                            points: newTotalPoints,
+                        })
+                    ]);
                     if (newLevel > previousLevel) {
                         const levelName = levelConfig_1.LEVEL_CONFIG[newLevel]?.name || 'New Level';
                         notificationService_1.NotificationService.notifyLevelUp(report.reporter_id, newLevel, levelName);
@@ -313,33 +340,53 @@ const resolveReport = async (req, res) => {
                 }
                 notificationService_1.NotificationService.notifyReportResolved(report.reporter_id, id, totalPoints, newLevel);
                 const pointsAuditId = (0, crypto_1.randomUUID)();
-                const pointsAuditStmt = sqlite_1.default.prepare(`
+                await client.query(`
           INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-                pointsAuditStmt.run(pointsAuditId, req.userId, 'POINTS_AWARDED', 'USER', report.reporter_id, JSON.stringify({
-                    points_awarded: totalPoints,
-                    reason: 'report_resolved',
-                    report_id: id,
-                    total_points: newTotalPoints,
-                    points_breakdown: pointsBreakdown,
-                }));
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        `, [
+                    pointsAuditId,
+                    req.userId,
+                    'POINTS_AWARDED',
+                    'USER',
+                    report.reporter_id,
+                    JSON.stringify({
+                        points_awarded: totalPoints,
+                        reason: 'report_resolved',
+                        report_id: id,
+                        total_points: newTotalPoints,
+                        points_breakdown: pointsBreakdown,
+                    })
+                ]);
             }
             // 4. Audit log for resolution
             const resolutionAuditId = (0, crypto_1.randomUUID)();
-            const resolutionAuditStmt = sqlite_1.default.prepare(`
+            await client.query(`
         INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
-            resolutionAuditStmt.run(resolutionAuditId, req.userId, 'REPORT_RESOLVED', 'REPORT', id, JSON.stringify({
-                cleaned_image_url,
-                notes: notes || '',
-                previous_status: report.status,
-                new_status: 'resolved',
-                resolved_by: req.userId,
-                points_awarded: report.reporter_id ? totalPoints : 0,
-            }));
-        })();
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      `, [
+                resolutionAuditId,
+                req.userId,
+                'REPORT_RESOLVED',
+                'REPORT',
+                id,
+                JSON.stringify({
+                    cleaned_image_url,
+                    notes: notes || '',
+                    previous_status: report.status,
+                    new_status: 'resolved',
+                    resolved_by: req.userId,
+                    points_awarded: report.reporter_id ? totalPoints : 0,
+                })
+            ]);
+            await client.query('COMMIT');
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
         return res.status(200).json({
             id,
             status: 'resolved',
@@ -362,24 +409,24 @@ const getReportAuditLogs = async (req, res) => {
     try {
         const { id } = req.params;
         const { limit = 50 } = req.query;
-        const reportStmt = sqlite_1.default.prepare('SELECT id FROM reports WHERE id = ?');
-        const report = reportStmt.get(id);
+        const reportResult = await postgres_1.pool.query('SELECT id FROM reports WHERE id = $1', [id]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
             });
         }
-        const auditStmt = sqlite_1.default.prepare(`
+        const auditResult = await postgres_1.pool.query(`
       SELECT 
         al.*,
         u.username, u.email
       FROM audit_logs al
       LEFT JOIN users u ON al.actor_id = u.id
-      WHERE al.target_type = 'REPORT' AND al.target_id = ?
+      WHERE al.target_type = 'REPORT' AND al.target_id = $1
       ORDER BY al.created_at DESC
-      LIMIT ?
-    `);
-        const auditLogs = auditStmt.all(id, parseInt(limit));
+      LIMIT $2
+    `, [id, parseInt(limit)]);
+        const auditLogs = auditResult.rows;
         const formattedAuditLogs = auditLogs.map(log => ({
             id: log.id,
             actor_id: log.actor_id,
@@ -409,7 +456,7 @@ const getReportAuditLogs = async (req, res) => {
 exports.getReportAuditLogs = getReportAuditLogs;
 const getAdminUsers = async (req, res) => {
     try {
-        const stmt = sqlite_1.default.prepare(`
+        const result = await postgres_1.pool.query(`
       SELECT 
         a.id,
         a.user_id as userId,
@@ -422,7 +469,7 @@ const getAdminUsers = async (req, res) => {
       WHERE a.role IN ('admin', 'viewer', 'editor')
       ORDER BY u.username ASC
     `);
-        const admins = stmt.all();
+        const admins = result.rows;
         return res.status(200).json({
             data: admins,
             message: 'Admin users fetched successfully'
@@ -440,57 +487,86 @@ const getAdminStats = async (req, res) => {
     try {
         const adminRegion = req.adminRegion || null;
         const userId = req.userId || null;
-        const pendingStmt = sqlite_1.default.prepare(`
-      SELECT COUNT(*) as count FROM reports 
-      WHERE status = 'pending'
-      ${adminRegion ? 'AND location LIKE ?' : ''}
-    `);
-        const pending = adminRegion
-            ? pendingStmt.get(`%${adminRegion.city || adminRegion}%`).count
-            : pendingStmt.get().count;
-        const assignedStmt = sqlite_1.default.prepare(`
-      SELECT COUNT(*) as count FROM reports 
-      WHERE mcd_verified_by = ?
-      AND status = 'assigned'
-    `);
-        const assignedToMe = userId ? assignedStmt.get(userId).count : 0;
+        let pendingResult;
+        if (adminRegion) {
+            pendingResult = await postgres_1.pool.query(`
+        SELECT COUNT(*) as count FROM reports 
+        WHERE status = 'pending'
+        AND location LIKE $1
+      `, [`%${adminRegion.city || adminRegion}%`]);
+        }
+        else {
+            pendingResult = await postgres_1.pool.query(`
+        SELECT COUNT(*) as count FROM reports 
+        WHERE status = 'pending'
+      `);
+        }
+        const pending = parseInt(pendingResult.rows[0].count);
+        let assignedToMe = 0;
+        if (userId) {
+            const assignedResult = await postgres_1.pool.query(`
+        SELECT COUNT(*) as count FROM reports 
+        WHERE mcd_verified_by = $1
+        AND status = 'assigned'
+      `, [userId]);
+            assignedToMe = parseInt(assignedResult.rows[0].count);
+        }
         const monthAgoStr = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-        const resolvedStmt = sqlite_1.default.prepare(`
-      SELECT COUNT(*) as count FROM reports 
-      WHERE status = 'resolved'
-      AND updated_at >= ?
-      ${adminRegion ? 'AND location LIKE ?' : ''}
-    `);
-        const resolvedThisMonth = adminRegion
-            ? resolvedStmt.get(monthAgoStr, `%${adminRegion.city || adminRegion}%`).count
-            : resolvedStmt.get(monthAgoStr).count;
-        const timeStmt = sqlite_1.default.prepare(`
-      SELECT 
-        AVG(
-          (julianday(updated_at) - julianday(created_at)) * 24
-        ) as avgHours
-      FROM reports 
-      WHERE status = 'resolved'
-      AND updated_at IS NOT NULL
-      ${adminRegion ? 'AND location LIKE ?' : ''}
-    `);
-        const avgTimeResult = adminRegion
-            ? timeStmt.get(`%${adminRegion.city || adminRegion}%`)
-            : timeStmt.get();
-        const avgHours = avgTimeResult?.avgHours ? Math.round(avgTimeResult.avgHours * 10) / 10 : 0;
-        const categoryStmt = sqlite_1.default.prepare(`
+        let resolvedResult;
+        if (adminRegion) {
+            resolvedResult = await postgres_1.pool.query(`
+        SELECT COUNT(*) as count FROM reports 
+        WHERE status = 'resolved'
+        AND updated_at >= $1
+        AND location LIKE $2
+      `, [monthAgoStr, `%${adminRegion.city || adminRegion}%`]);
+        }
+        else {
+            resolvedResult = await postgres_1.pool.query(`
+        SELECT COUNT(*) as count FROM reports 
+        WHERE status = 'resolved'
+        AND updated_at >= $1
+      `, [monthAgoStr]);
+        }
+        const resolvedThisMonth = parseInt(resolvedResult.rows[0].count);
+        let avgTimeResult;
+        if (adminRegion) {
+            avgTimeResult = await postgres_1.pool.query(`
+        SELECT 
+          AVG(
+            EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600
+          ) as avgHours
+        FROM reports 
+        WHERE status = 'resolved'
+        AND updated_at IS NOT NULL
+        AND location LIKE $1
+      `, [`%${adminRegion.city || adminRegion}%`]);
+        }
+        else {
+            avgTimeResult = await postgres_1.pool.query(`
+        SELECT 
+          AVG(
+            EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600
+          ) as avgHours
+        FROM reports 
+        WHERE status = 'resolved'
+        AND updated_at IS NOT NULL
+      `);
+        }
+        const avgHours = avgTimeResult.rows[0]?.avghours ? Math.round(parseFloat(avgTimeResult.rows[0].avghours) * 10) / 10 : 0;
+        const categoryResult = await postgres_1.pool.query(`
       SELECT category, COUNT(*) as count FROM reports
       GROUP BY category
       ORDER BY count DESC
       LIMIT 5
     `);
-        const byCategory = categoryStmt.all();
-        const recentStmt = sqlite_1.default.prepare(`
+        const byCategory = categoryResult.rows;
+        const recentResult = await postgres_1.pool.query(`
       SELECT id, title, status, updated_at as updatedAt FROM reports
       ORDER BY updated_at DESC
       LIMIT 5
     `);
-        const recentActivity = recentStmt.all();
+        const recentActivity = recentResult.rows;
         return res.status(200).json({
             data: {
                 pendingReports: pending,
@@ -523,12 +599,14 @@ const getAssignedReports = async (req, res) => {
             });
         }
         const { status = 'all', sort = 'new', limit = 20 } = req.query;
-        let whereClause = 'WHERE rp.admin_id = ?';
+        let whereClause = 'WHERE rp.admin_id = $1';
         const params = [req.adminId];
+        let paramIndex = 2;
         // Filter by progress status
         if (status && status !== 'all') {
-            whereClause += ' AND rp.progress_status = ?';
+            whereClause += ` AND rp.progress_status = $${paramIndex}`;
             params.push(status);
+            paramIndex++;
         }
         // Sorting
         let orderBy = 'ORDER BY r.created_at DESC';
@@ -560,11 +638,11 @@ const getAssignedReports = async (req, res) => {
       LEFT JOIN users u ON r.reporter_id = u.id
       ${whereClause}
       ${orderBy}
-      LIMIT ?
+      LIMIT $${paramIndex}
     `;
         params.push(parseInt(limit));
-        const stmt = sqlite_1.default.prepare(sql);
-        const reports = stmt.all(...params);
+        const result = await postgres_1.pool.query(sql, params);
+        const reports = result.rows;
         const formattedReports = reports.map(report => {
             let aiScore = null;
             try {
@@ -637,10 +715,10 @@ const updateReportProgress = async (req, res) => {
             });
         }
         // Check if report is assigned to this admin
-        const assignmentStmt = sqlite_1.default.prepare(`
-      SELECT id FROM report_progress WHERE report_id = ? AND admin_id = ?
-    `);
-        const assignment = assignmentStmt.get(reportId, req.adminId);
+        const assignmentResult = await postgres_1.pool.query(`
+      SELECT id FROM report_progress WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId]);
+        const assignment = assignmentResult.rows[0];
         if (!assignment) {
             return res.status(403).json({
                 error: { code: 'FORBIDDEN', message: 'Report not assigned to you' },
@@ -656,34 +734,38 @@ const updateReportProgress = async (req, res) => {
         // Build update query
         const updates = [];
         const params = [];
+        let paramIndex = 1;
         if (progress_status) {
-            updates.push('progress_status = ?');
+            updates.push(`progress_status = $${paramIndex}`);
             params.push(progress_status);
+            paramIndex++;
         }
         if (notes !== undefined) {
-            updates.push('notes = ?');
+            updates.push(`notes = $${paramIndex}`);
             params.push(notes);
+            paramIndex++;
         }
         if (photos) {
-            updates.push('photos = ?');
+            updates.push(`photos = $${paramIndex}`);
             params.push(JSON.stringify(photos));
+            paramIndex++;
         }
         if (completion_details !== undefined) {
-            updates.push('completion_details = ?');
+            updates.push(`completion_details = $${paramIndex}`);
             params.push(completion_details);
+            paramIndex++;
         }
         updates.push('updated_at = CURRENT_TIMESTAMP');
         params.push(reportId, req.adminId);
-        const updateStmt = sqlite_1.default.prepare(`
+        const updateSql = `
       UPDATE report_progress 
       SET ${updates.join(', ')}
-      WHERE report_id = ? AND admin_id = ?
-    `);
-        updateStmt.run(...params);
+      WHERE report_id = $${paramIndex} AND admin_id = $${paramIndex + 1}
+    `;
+        await postgres_1.pool.query(updateSql, params);
         // If progress_status is 'in_progress', update report status
         if (progress_status === 'in_progress') {
-            const reportStmt = sqlite_1.default.prepare('UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-            reportStmt.run('in_progress', reportId);
+            await postgres_1.pool.query('UPDATE reports SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['in_progress', reportId]);
         }
         return res.status(200).json({
             success: true,
@@ -711,10 +793,10 @@ const submitForApproval = async (req, res) => {
             });
         }
         // Check if report is assigned to this admin
-        const progressStmt = sqlite_1.default.prepare(`
-      SELECT * FROM report_progress WHERE report_id = ? AND admin_id = ?
-    `);
-        const progress = progressStmt.get(reportId, req.adminId);
+        const progressResult = await postgres_1.pool.query(`
+      SELECT * FROM report_progress WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId]);
+        const progress = progressResult.rows[0];
         if (!progress) {
             return res.status(403).json({
                 error: { code: 'FORBIDDEN', message: 'Report not assigned to you' },
@@ -730,35 +812,44 @@ const submitForApproval = async (req, res) => {
             });
         }
         // Update progress - set to submitted
-        const updateProgressStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE report_progress
       SET 
         progress_status = 'submitted_for_approval',
-        completion_details = ?,
-        photos = ?,
+        completion_details = $1,
+        photos = $2,
         submitted_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
-      WHERE report_id = ? AND admin_id = ?
-    `);
-        updateProgressStmt.run(completion_details, photos ? JSON.stringify(photos) : '[]', reportId, req.adminId);
+      WHERE report_id = $3 AND admin_id = $4
+    `, [
+            completion_details,
+            photos ? JSON.stringify(photos) : '[]',
+            reportId,
+            req.adminId
+        ]);
         // Update report status - pending approval
-        const updateReportStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE reports
       SET status = 'pending_approval', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
-        updateReportStmt.run(reportId);
+      WHERE id = $1
+    `, [reportId]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'WORK_SUBMITTED', 'REPORT', reportId, JSON.stringify({
-            admin_id: req.adminId,
-            completion_details,
-            photos: photos || [],
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'WORK_SUBMITTED',
+            'REPORT',
+            reportId,
+            JSON.stringify({
+                admin_id: req.adminId,
+                completion_details,
+                photos: photos || [],
+            })
+        ]);
         return res.status(200).json({
             success: true,
             message: 'Report submitted for approval',
@@ -803,8 +894,11 @@ const getPendingApprovals = async (req, res) => {
       ORDER BY rp.submitted_at DESC
       LIMIT ?
     `;
-        const stmt = sqlite_1.default.prepare(sql);
-        const approvals = stmt.all(parseInt(limit));
+        // Convert ? placeholders to $1, $2, etc. for PostgreSQL
+        let paramIndex = 1;
+        const convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+        const result = await postgres_1.pool.query(convertedSql, [parseInt(limit)]);
+        const approvals = result.rows;
         const formattedApprovals = approvals.map(item => {
             let aiScore = null;
             try {
@@ -874,8 +968,8 @@ const approveReportWork = async (req, res) => {
             });
         }
         // Check if report is pending approval
-        const reportStmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const report = reportStmt.get(reportId);
+        const reportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [reportId]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -887,36 +981,40 @@ const approveReportWork = async (req, res) => {
             });
         }
         // Update report - mark as resolved
-        const updateReportStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE reports
       SET 
         status = 'resolved',
-        mcd_verified_by = ?,
+        mcd_verified_by = $1,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
-        updateReportStmt.run(req.userId, reportId);
+      WHERE id = $2
+    `, [req.userId, reportId]);
         // Update progress - mark as approved
-        const updateProgressStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE report_progress
       SET 
         approved_at = CURRENT_TIMESTAMP,
-        approved_by = ?,
+        approved_by = $1,
         updated_at = CURRENT_TIMESTAMP
-      WHERE report_id = ?
-    `);
-        updateProgressStmt.run(req.adminId, reportId);
+      WHERE report_id = $2
+    `, [req.adminId, reportId]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'WORK_APPROVED', 'REPORT', reportId, JSON.stringify({
-            approved_by: req.adminId,
-            previous_status: report.status,
-            new_status: 'resolved',
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'WORK_APPROVED',
+            'REPORT',
+            reportId,
+            JSON.stringify({
+                approved_by: req.adminId,
+                previous_status: report.status,
+                new_status: 'resolved',
+            })
+        ]);
         return res.status(200).json({
             success: true,
             message: 'Report approved and marked as resolved',
@@ -952,8 +1050,8 @@ const rejectReportWork = async (req, res) => {
             });
         }
         // Check if report is pending approval
-        const reportStmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const report = reportStmt.get(reportId);
+        const reportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [reportId]);
+        const report = reportResult.rows[0];
         if (!report) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
@@ -965,35 +1063,39 @@ const rejectReportWork = async (req, res) => {
             });
         }
         // Update report - back to assigned
-        const updateReportStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE reports
       SET status = 'assigned', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
-        updateReportStmt.run(reportId);
+      WHERE id = $1
+    `, [reportId]);
         // Update progress - mark as rejected
-        const updateProgressStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       UPDATE report_progress
       SET 
-        rejection_reason = ?,
+        rejection_reason = $1,
         rejected_at = CURRENT_TIMESTAMP,
         progress_status = 'in_progress',
         updated_at = CURRENT_TIMESTAMP
-      WHERE report_id = ?
-    `);
-        updateProgressStmt.run(rejection_reason, reportId);
+      WHERE report_id = $2
+    `, [rejection_reason, reportId]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'WORK_REJECTED', 'REPORT', reportId, JSON.stringify({
-            rejected_by: req.adminId,
-            rejection_reason,
-            previous_status: report.status,
-            new_status: 'assigned',
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'WORK_REJECTED',
+            'REPORT',
+            reportId,
+            JSON.stringify({
+                rejected_by: req.adminId,
+                rejection_reason,
+                previous_status: report.status,
+                new_status: 'assigned',
+            })
+        ]);
         return res.status(200).json({
             success: true,
             message: 'Work rejected - admin must revise',

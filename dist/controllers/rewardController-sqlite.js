@@ -1,25 +1,22 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteReward = exports.updateReward = exports.createReward = exports.redeemReward = exports.getRewards = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+exports.deleteReward = exports.updateReward = exports.createReward = exports.redeemReward = exports.getAllRewards = exports.getRewards = void 0;
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const notificationService_1 = require("../services/notificationService");
 // GET /api/v1/rewards - Public
 const getRewards = async (req, res) => {
     try {
         const now = new Date().toISOString();
-        const rewardsStmt = sqlite_1.default.prepare(`
+        const rewardsResult = await postgres_1.pool.query(`
       SELECT * FROM rewards 
       WHERE (available_from IS NULL AND available_until IS NULL)
-         OR (available_from <= ? AND available_until >= ?)
-         OR (available_from IS NULL AND available_until >= ?)
-         OR (available_from <= ? AND available_until IS NULL)
+         OR (available_from <= $1 AND available_until >= $2)
+         OR (available_from IS NULL AND available_until >= $3)
+         OR (available_from <= $4 AND available_until IS NULL)
       ORDER BY required_points ASC
-    `);
-        const rewards = rewardsStmt.all(now, now, now, now);
+    `, [now, now, now, now]);
+        const rewards = rewardsResult.rows;
         // Parse JSON fields
         const formattedRewards = rewards.map((reward) => ({
             ...reward,
@@ -41,25 +38,54 @@ const getRewards = async (req, res) => {
     }
 };
 exports.getRewards = getRewards;
+// GET /api/v1/rewards/admin/all - Admin only (all rewards including unavailable)
+const getAllRewards = async (req, res) => {
+    try {
+        const rewardsResult = await postgres_1.pool.query(`
+      SELECT * FROM rewards 
+      ORDER BY created_at DESC, required_points ASC
+    `);
+        const rewards = rewardsResult.rows;
+        // Parse JSON fields
+        const formattedRewards = rewards.map((reward) => ({
+            ...reward,
+            metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+            requiredPoints: reward.required_points,
+            maxPerUser: reward.max_per_user,
+            availableFrom: reward.available_from,
+            availableUntil: reward.available_until
+        }));
+        return res.status(200).json({
+            data: formattedRewards,
+        });
+    }
+    catch (error) {
+        console.error('Get all rewards error:', error);
+        res.status(500).json({
+            error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch rewards' },
+        });
+    }
+};
+exports.getAllRewards = getAllRewards;
 // POST /api/v1/rewards/:id/redeem - User
 const redeemReward = async (req, res) => {
     try {
         const { id } = req.params;
         const { delivery_address, proof } = req.body;
         // Get user with current points
-        const userStmt = sqlite_1.default.prepare('SELECT id, civic_points FROM users WHERE id = ?');
-        const user = userStmt.get(req.userId);
+        const userResult = await postgres_1.pool.query('SELECT id, civic_points FROM users WHERE id = $1', [req.userId]);
+        const user = userResult.rows[0];
         if (!user) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'User not found' },
             });
         }
         // Get user's redemption count for this reward
-        const redemptionCountStmt = sqlite_1.default.prepare('SELECT COUNT(*) as count FROM redemptions WHERE user_id = ? AND reward_id = ?');
-        const redemptionCount = redemptionCountStmt.get(req.userId, id);
+        const redemptionCountResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM redemptions WHERE user_id = $1 AND reward_id = $2', [req.userId, id]);
+        const redemptionCount = { count: parseInt(redemptionCountResult.rows[0].count) };
         // Get reward details
-        const rewardStmt = sqlite_1.default.prepare('SELECT * FROM rewards WHERE id = ?');
-        const reward = rewardStmt.get(id);
+        const rewardResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [id]);
+        const reward = rewardResult.rows[0];
         if (!reward) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Reward not found' },
@@ -105,10 +131,11 @@ const redeemReward = async (req, res) => {
         const redemptionId = (0, crypto_1.randomUUID)();
         const createdAt = new Date().toISOString();
         // Transaction for atomic operations
-        sqlite_1.default.transaction(() => {
+        const client = await postgres_1.pool.connect();
+        try {
+            await client.query('BEGIN');
             // Deduct points
-            const updateUserStmt = sqlite_1.default.prepare('UPDATE users SET civic_points = civic_points - ? WHERE id = ?');
-            updateUserStmt.run(reward.required_points, req.userId);
+            await client.query('UPDATE users SET civic_points = civic_points - $1 WHERE id = $2', [reward.required_points, req.userId]);
             // Create redemption record
             const requestData = {
                 delivery_address: delivery_address || {},
@@ -116,11 +143,18 @@ const redeemReward = async (req, res) => {
                 points_deducted: reward.required_points,
                 redeemed_at: createdAt,
             };
-            const insertRedemptionStmt = sqlite_1.default.prepare(`
+            await client.query(`
           INSERT INTO redemptions (id, user_id, reward_id, status, request_data, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-            insertRedemptionStmt.run(redemptionId, req.userId, id, 'requested', JSON.stringify(requestData), createdAt, createdAt);
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+                redemptionId,
+                req.userId,
+                id,
+                'requested',
+                JSON.stringify(requestData),
+                createdAt,
+                createdAt
+            ]);
             // Create audit log
             const auditLogId = (0, crypto_1.randomUUID)();
             const auditDetails = {
@@ -131,12 +165,27 @@ const redeemReward = async (req, res) => {
                 delivery_address: delivery_address,
                 status: 'requested',
             };
-            const insertAuditStmt = sqlite_1.default.prepare(`
+            await client.query(`
           INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-            insertAuditStmt.run(auditLogId, req.userId, 'REWARD_REDEEMED', 'REDEMPTION', redemptionId, JSON.stringify(auditDetails), createdAt);
-        })();
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+                auditLogId,
+                req.userId,
+                'REWARD_REDEEMED',
+                'REDEMPTION',
+                redemptionId,
+                JSON.stringify(auditDetails),
+                createdAt
+            ]);
+            await client.query('COMMIT');
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
         // Fire-and-forget notification to user about reward redemption
         notificationService_1.NotificationService.notifyRewardRedeemed(req.userId, id, reward.title, reward.required_points);
         return res.status(201).json({
@@ -173,8 +222,8 @@ const createReward = async (req, res) => {
             });
         }
         // Check if key already exists
-        const existingStmt = sqlite_1.default.prepare('SELECT id FROM rewards WHERE key = ?');
-        const existingReward = existingStmt.get(key);
+        const existingResult = await postgres_1.pool.query('SELECT id FROM rewards WHERE key = $1', [key]);
+        const existingReward = existingResult.rows[0];
         if (existingReward) {
             return res.status(409).json({
                 error: {
@@ -185,25 +234,40 @@ const createReward = async (req, res) => {
         }
         // Create reward
         const rewardId = (0, crypto_1.randomUUID)();
-        const insertStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO rewards (id, key, title, description, required_points, available_from, available_until, max_per_user, metadata, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        insertStmt.run(rewardId, key, title, description, required_points, available_from ? new Date(available_from).toISOString() : null, available_until ? new Date(available_until).toISOString() : null, max_per_user, JSON.stringify(metadata || {}));
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+    `, [
+            rewardId,
+            key,
+            title,
+            description,
+            required_points,
+            available_from ? new Date(available_from).toISOString() : null,
+            available_until ? new Date(available_until).toISOString() : null,
+            max_per_user,
+            JSON.stringify(metadata || {})
+        ]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'REWARD_CREATED', 'REWARD', rewardId, JSON.stringify({
-            title: title,
-            required_points: required_points,
-            key: key,
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'REWARD_CREATED',
+            'REWARD',
+            rewardId,
+            JSON.stringify({
+                title: title,
+                required_points: required_points,
+                key: key,
+            })
+        ]);
         // Get created reward
-        const rewardStmt = sqlite_1.default.prepare('SELECT * FROM rewards WHERE id = ?');
-        const reward = rewardStmt.get(rewardId);
+        const rewardResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [rewardId]);
+        const reward = rewardResult.rows[0];
         const formattedReward = {
             ...reward,
             metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
@@ -228,8 +292,8 @@ const updateReward = async (req, res) => {
         const { id } = req.params;
         const updates = req.body;
         // Get existing reward
-        const existingStmt = sqlite_1.default.prepare('SELECT * FROM rewards WHERE id = ?');
-        const existingReward = existingStmt.get(id);
+        const existingResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [id]);
+        const existingReward = existingResult.rows[0];
         if (!existingReward) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Reward not found' },
@@ -238,43 +302,53 @@ const updateReward = async (req, res) => {
         // Build update query
         const updateFields = [];
         const updateParams = [];
+        let paramIndex = 1;
         Object.keys(updates).forEach(key => {
             if (key === 'required_points' || key === 'max_per_user') {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(updates[key]);
+                paramIndex++;
             }
             else if (key === 'available_from' || key === 'available_until') {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(updates[key] ? new Date(updates[key]).toISOString() : null);
+                paramIndex++;
             }
             else if (key === 'metadata') {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(JSON.stringify(updates[key]));
+                paramIndex++;
             }
             else {
-                updateFields.push(`${key} = ?`);
+                updateFields.push(`${key} = $${paramIndex}`);
                 updateParams.push(updates[key]);
+                paramIndex++;
             }
         });
         if (updateFields.length > 0) {
-            const updateSql = `UPDATE rewards SET ${updateFields.join(', ')} WHERE id = ?`;
+            const updateSql = `UPDATE rewards SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
             updateParams.push(id);
-            const updateStmt = sqlite_1.default.prepare(updateSql);
-            updateStmt.run(...updateParams);
+            await postgres_1.pool.query(updateSql, updateParams);
         }
         // Get updated reward
-        const rewardStmt = sqlite_1.default.prepare('SELECT * FROM rewards WHERE id = ?');
-        const reward = rewardStmt.get(id);
+        const rewardResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [id]);
+        const reward = rewardResult.rows[0];
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'REWARD_UPDATED', 'REWARD', id, JSON.stringify({
-            previous: existingReward,
-            updates: updates,
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'REWARD_UPDATED',
+            'REWARD',
+            id,
+            JSON.stringify({
+                previous: existingReward,
+                updates: updates,
+            })
+        ]);
         const formattedReward = {
             ...reward,
             metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
@@ -298,26 +372,31 @@ const deleteReward = async (req, res) => {
     try {
         const { id } = req.params;
         // Get existing reward
-        const existingStmt = sqlite_1.default.prepare('SELECT * FROM rewards WHERE id = ?');
-        const existingReward = existingStmt.get(id);
+        const existingResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [id]);
+        const existingReward = existingResult.rows[0];
         if (!existingReward) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Reward not found' },
             });
         }
         // Delete reward
-        const deleteStmt = sqlite_1.default.prepare('DELETE FROM rewards WHERE id = ?');
-        deleteStmt.run(id);
+        await postgres_1.pool.query('DELETE FROM rewards WHERE id = $1', [id]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
-        const auditStmt = sqlite_1.default.prepare(`
+        await postgres_1.pool.query(`
       INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-        auditStmt.run(auditLogId, req.userId, 'REWARD_DELETED', 'REWARD', id, JSON.stringify({
-            title: existingReward.title,
-            key: existingReward.key,
-        }));
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+            auditLogId,
+            req.userId,
+            'REWARD_DELETED',
+            'REWARD',
+            id,
+            JSON.stringify({
+                title: existingReward.title,
+                key: existingReward.key,
+            })
+        ]);
         return res.status(200).json({
             message: 'Reward deleted successfully',
         });

@@ -56,7 +56,7 @@ const aiRoutes_1 = __importDefault(require("./routes/aiRoutes"));
 const notificationRoutes_1 = __importDefault(require("./routes/notificationRoutes"));
 const mapRoutes_1 = __importDefault(require("./routes/mapRoutes"));
 require("./utils/queue");
-const sqlite_1 = __importDefault(require("./config/sqlite"));
+const postgres_1 = require("./config/postgres");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
@@ -93,17 +93,17 @@ app.get('/api/v1', (req, res) => {
         docs: 'Refer to README or swagger docs (if enabled)'
     });
 });
-// Health check (SQLite only)
+// Health check
 app.get('/health', async (req, res) => {
     try {
-        // Test SQLite connection
-        sqlite_1.default.prepare('SELECT 1').get();
+        // Test PostgreSQL connection
+        await postgres_1.pool.query('SELECT 1');
         // Test Redis connection
         await redis_1.default.ping();
         res.json({
             status: 'ok',
             service: 'cleanlink-api',
-            database: 'connected (SQLite)',
+            database: 'connected (PostgreSQL)',
             redis: 'connected'
         });
     }
@@ -115,15 +115,15 @@ app.get('/health', async (req, res) => {
         });
     }
 });
-// SQLite test endpoints
-app.get('/sqlite-reports', (req, res) => {
+// Test endpoints
+app.get('/sqlite-reports', async (req, res) => {
     try {
-        const stmt = sqlite_1.default.prepare('SELECT id, title, upvotes, downvotes FROM reports LIMIT 10');
-        const reports = stmt.all();
+        const result = await postgres_1.pool.query('SELECT id, title, upvotes, downvotes FROM reports LIMIT 10');
+        const reports = result.rows;
         res.json({
             data: reports,
             count: reports.length,
-            message: 'Reports from SQLite database'
+            message: 'Reports from PostgreSQL database'
         });
     }
     catch (error) {
@@ -141,26 +141,30 @@ app.get('/test-permissions', auth_1.authMiddleware, adminRoles_1.adminMiddleware
     });
 });
 // Debug endpoint to see all admins
-app.get('/debug/admins', auth_1.authMiddleware, adminRoles_1.adminMiddleware, (req, res) => {
-    const stmt = sqlite_1.default.prepare(`
-    SELECT 
-      a.id as admin_id,
-      a.user_id,
-      a.role,
-      a.status,
-      u.email,
-      u.username
-    FROM admins a
-    JOIN users u ON a.user_id = u.id
-  `);
-    const admins = stmt.all();
-    res.json(admins);
+app.get('/debug/admins', auth_1.authMiddleware, adminRoles_1.adminMiddleware, async (req, res) => {
+    try {
+        const result = await postgres_1.pool.query(`
+      SELECT 
+        a.id as admin_id,
+        a.user_id,
+        a.role,
+        a.status,
+        u.email,
+        u.username
+      FROM admins a
+      JOIN users u ON a.user_id = u.id
+    `);
+        res.json(result.rows);
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
-app.get('/sqlite-reports/:id', (req, res) => {
+app.get('/sqlite-reports/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const stmt = sqlite_1.default.prepare('SELECT * FROM reports WHERE id = ?');
-        const report = stmt.get(id);
+        const result = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
+        const report = result.rows[0];
         if (!report) {
             return res.status(404).json({ error: 'Report not found' });
         }
@@ -224,5 +228,5 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
 });
 // Start server
 app.listen(PORT, () => {
-    console.log(`🚀 CleanLink API (SQLite) running on port ${PORT}`);
+    // Server started
 });

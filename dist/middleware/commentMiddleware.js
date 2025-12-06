@@ -1,22 +1,19 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.commentAuthorMiddleware = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const commentAuthorMiddleware = async (req, res, next) => {
     try {
         const { id } = req.params; // comment id
-        const stmt = sqlite_1.default.prepare('SELECT authorId FROM comments WHERE id = ?');
-        const comment = stmt.get(id);
+        const result = await postgres_1.pool.query('SELECT author_id FROM comments WHERE id = $1', [id]);
+        const comment = result.rows[0];
         if (!comment) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Comment not found' },
             });
         }
         // Check if user is the comment author
-        if (comment.authorId !== req.userId) {
+        if (comment?.author_id !== req.userId) {
             return res.status(403).json({
                 error: { code: 'FORBIDDEN', message: 'Not authorized to modify this comment' },
             });

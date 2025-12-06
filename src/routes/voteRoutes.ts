@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { voteReport } from '../controllers/voteController-sqlite';
+import { voteReport } from '../controllers/voteController';
 import { authMiddleware } from '../middleware/auth';
 import { authenticatedLimiter } from '../middleware/rateLimiter';
 

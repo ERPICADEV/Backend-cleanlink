@@ -1,30 +1,39 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateId = exports.transaction = exports.query = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 exports.query = {
     // For SELECT queries
-    get: (sql, params = []) => {
-        const stmt = sqlite_1.default.prepare(sql);
-        return stmt.get(...params);
+    get: async (sql, params = []) => {
+        const result = await postgres_1.pool.query(sql, params);
+        return result.rows[0];
     },
     // For SELECT queries returning multiple rows
-    all: (sql, params = []) => {
-        const stmt = sqlite_1.default.prepare(sql);
-        return stmt.all(...params);
+    all: async (sql, params = []) => {
+        const result = await postgres_1.pool.query(sql, params);
+        return result.rows;
     },
     // For INSERT/UPDATE/DELETE
-    run: (sql, params = []) => {
-        const stmt = sqlite_1.default.prepare(sql);
-        return stmt.run(...params);
+    run: async (sql, params = []) => {
+        const result = await postgres_1.pool.query(sql, params);
+        return { rowCount: result.rowCount || 0 };
     }
 };
-const transaction = (callback) => {
-    sqlite_1.default.transaction(callback)();
+const transaction = async (callback) => {
+    const client = await postgres_1.pool.connect();
+    try {
+        await client.query('BEGIN');
+        await callback();
+        await client.query('COMMIT');
+    }
+    catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+    finally {
+        client.release();
+    }
 };
 exports.transaction = transaction;
 const generateId = () => (0, crypto_1.randomUUID)();

@@ -4,14 +4,13 @@ import {
   getComments, 
   updateComment, 
   deleteComment 
-} from '../controllers/commentController-sqlite';
-import { voteComment, getCommentVote } from '../controllers/commentVoteController-sqlite';
+} from '../controllers/commentController';
+import { voteComment, getCommentVote } from '../controllers/commentVoteController';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { authenticatedLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// SQLite endpoints
 router.post('/:id/comments', authMiddleware, createComment);
 router.get('/:id/comments', optionalAuthMiddleware, getComments);
 router.patch('/comments/:id', authMiddleware, updateComment);

@@ -2,11 +2,10 @@ import { Router } from 'express';
 import { 
   updateAIResult, 
   getPendingAIReports 
-} from '../controllers/aiController-sqlite';
+} from '../controllers/aiController';
 
 const router = Router();
 
-// SQLite endpoints
 router.post('/reports/:id/result', updateAIResult);
 router.get('/reports/pending', getPendingAIReports);
 

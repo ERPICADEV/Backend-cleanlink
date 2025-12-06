@@ -15,7 +15,7 @@ import {
   getReportAuditLogs,
   getAdminUsers,
   getAdminStats
-} from '../controllers/adminController-sqlite';
+} from '../controllers/adminController';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware, superAdminOnly } from '../middleware/adminMiddleware';
 

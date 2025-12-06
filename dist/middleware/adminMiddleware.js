@@ -1,12 +1,9 @@
 "use strict";
 // src/middleware/adminRoles.ts
 // 🔐 Admin Role & Permission Middleware
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.noViewerAccess = exports.assignedReportsOnly = exports.canAccessReport = exports.requirePermission = exports.superAdminOnly = exports.adminMiddleware = void 0;
-const sqlite_1 = __importDefault(require("../config/sqlite"));
+const postgres_1 = require("../config/postgres");
 const permissions_1 = require("../lib/permissions");
 /**
  * Middleware: Check if user is an admin (any role)
@@ -19,8 +16,8 @@ const adminMiddleware = async (req, res, next) => {
                 error: { code: 'UNAUTHORIZED', message: 'Authentication required' },
             });
         }
-        const stmt = sqlite_1.default.prepare('SELECT id, role, status FROM admins WHERE user_id = ?');
-        const admin = stmt.get(req.userId);
+        const result = await postgres_1.pool.query('SELECT id, role, status FROM admins WHERE user_id = $1', [req.userId]);
+        const admin = result.rows[0];
         if (!admin) {
             return res.status(403).json({
                 error: { code: 'FORBIDDEN', message: 'Admin access required' },
@@ -100,12 +97,11 @@ const canAccessReport = (req, res, next) => {
         if (req.isSuperAdmin)
             return true;
         // Check if report is assigned to this admin
-        const stmt = sqlite_1.default.prepare(`
+        const result = await postgres_1.pool.query(`
       SELECT admin_id FROM report_progress 
-      WHERE report_id = ? AND admin_id = ?
-    `);
-        const result = stmt.get(reportId, req.adminId);
-        return !!result;
+      WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId]);
+        return !!result.rows[0];
     };
     next();
 };
@@ -127,11 +123,11 @@ const assignedReportsOnly = async (req, res, next) => {
             return next();
         }
         // Check if report is assigned to this admin
-        const stmt = sqlite_1.default.prepare(`
+        const result = await postgres_1.pool.query(`
       SELECT id FROM report_progress 
-      WHERE report_id = ? AND admin_id = ?
-    `);
-        const assignment = stmt.get(reportId, req.adminId);
+      WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId]);
+        const assignment = result.rows[0];
         if (!assignment) {
             return res.status(403).json({
                 error: {

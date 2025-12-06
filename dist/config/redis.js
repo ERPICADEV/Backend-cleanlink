@@ -12,7 +12,7 @@ const redis = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:
     },
 });
 redis.on('connect', () => {
-    console.log('✅ Redis connected');
+    // Redis connected
 });
 redis.on('error', (err) => {
     console.error('❌ Redis error:', err);

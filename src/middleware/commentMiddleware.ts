@@ -1,12 +1,12 @@
 import { Request, Response, NextFunction } from 'express'
-import db from '../config/sqlite'
+import { pool } from '../config/postgres'
 
 export const commentAuthorMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params // comment id
 
-    const stmt = db.prepare('SELECT authorId FROM comments WHERE id = ?')
-    const comment = stmt.get(id)! as any
+    const result = await pool.query('SELECT author_id FROM comments WHERE id = $1', [id])
+    const comment = result.rows[0] as any
 
     if (!comment) {
       return res.status(404).json({
@@ -15,7 +15,7 @@ export const commentAuthorMiddleware = async (req: Request, res: Response, next:
     }
 
     // Check if user is the comment author
-    if (comment.authorId !== req.userId) {
+    if (comment?.author_id !== req.userId) {
       return res.status(403).json({
         error: { code: 'FORBIDDEN', message: 'Not authorized to modify this comment' },
       })

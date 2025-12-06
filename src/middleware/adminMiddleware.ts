@@ -2,7 +2,7 @@
 // 🔐 Admin Role & Permission Middleware
 
 import { Request, Response, NextFunction } from 'express'
-import db from '../config/sqlite'
+import { pool } from '../config/postgres'
 import { AdminRole, hasPermission } from '../lib/permissions'
 
 // Extend Express Request type to include admin info
@@ -30,8 +30,8 @@ export const adminMiddleware = async (req: Request, res: Response, next: NextFun
       })
     }
 
-    const stmt = db.prepare('SELECT id, role, status FROM admins WHERE user_id = ?')
-    const admin = stmt.get(req.userId) as any
+    const result = await pool.query('SELECT id, role, status FROM admins WHERE user_id = $1', [req.userId])
+    const admin = result.rows[0] as any
 
     if (!admin) {
       return res.status(403).json({
@@ -115,12 +115,11 @@ export const canAccessReport = (req: Request, res: Response, next: NextFunction)
     if (req.isSuperAdmin) return true
 
     // Check if report is assigned to this admin
-    const stmt = db.prepare(`
+    const result = await pool.query(`
       SELECT admin_id FROM report_progress 
-      WHERE report_id = ? AND admin_id = ?
-    `)
-    const result = stmt.get(reportId, req.adminId)
-    return !!result
+      WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId])
+    return !!result.rows[0]
   }
 
   next()
@@ -146,11 +145,11 @@ export const assignedReportsOnly = async (req: Request, res: Response, next: Nex
     }
 
     // Check if report is assigned to this admin
-    const stmt = db.prepare(`
+    const result = await pool.query(`
       SELECT id FROM report_progress 
-      WHERE report_id = ? AND admin_id = ?
-    `)
-    const assignment = stmt.get(reportId, req.adminId)
+      WHERE report_id = $1 AND admin_id = $2
+    `, [reportId, req.adminId])
+    const assignment = result.rows[0]
 
     if (!assignment) {
       return res.status(403).json({

@@ -1,4 +1,4 @@
-import db from '../config/sqlite'
+import { pool } from '../config/postgres'
 import { AIService, ReportForAnalysis } from '../services/aiService'
 
 const apiKey = process.env.OPENROUTER_API_KEY
@@ -29,8 +29,8 @@ export const processReportWithAI = async (reportId: string) => {
     }
 
     // Use retry for database queries
-    const report = await retryQuery(() => {
-      const stmt = db.prepare(`
+    const report = await retryQuery(async () => {
+      const result = await pool.query(`
         SELECT 
           id, 
           title, 
@@ -39,9 +39,9 @@ export const processReportWithAI = async (reportId: string) => {
           location, 
           category
         FROM reports
-        WHERE id = ?
-      `)
-      return stmt.get(reportId) as any
+        WHERE id = $1
+      `, [reportId])
+      return result.rows[0] as any
     })
 
     if (!report) {
@@ -82,16 +82,7 @@ export const processReportWithAI = async (reportId: string) => {
     }
 
     // Update report with AI results using retry
-    await retryQuery(() => {
-      const stmt = db.prepare(`
-        UPDATE reports 
-        SET 
-          ai_score = ?,
-          status = ?,
-          updated_at = ?
-        WHERE id = ?
-      `)
-      
+    await retryQuery(async () => {
       const newStatus = aiResult.legit > 0.7 ? 'community_verified' : 
                         aiResult.legit < 0.3 ? 'flagged' : 'pending'
       
@@ -103,14 +94,19 @@ export const processReportWithAI = async (reportId: string) => {
         processed_at: new Date().toISOString(),
       }
       
-      return Promise.resolve(
-        stmt.run(
-          JSON.stringify(aiScoreData),
-          newStatus,
-          new Date().toISOString(),
-          reportId
-        )
-      )
+      await pool.query(`
+        UPDATE reports 
+        SET 
+          ai_score = $1,
+          status = $2,
+          updated_at = $3
+        WHERE id = $4
+      `, [
+        JSON.stringify(aiScoreData),
+        newStatus,
+        new Date().toISOString(),
+        reportId
+      ])
     })
     
   } catch (error) {
