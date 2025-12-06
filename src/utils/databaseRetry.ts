@@ -20,13 +20,19 @@ export const withRetry = async <T>(
           throw error;
         }
         
-        // Log retry attempt for connection errors
+        // Log retry attempt for connection errors with full details
         console.warn(`⚠️  Database connection error (attempt ${attempt}/${maxRetries}), retrying in ${delayMs * attempt}ms...`, {
           code: (error as any)?.code,
-          message: (error as any)?.message?.substring(0, 100)
+          message: (error as any)?.message?.substring(0, 200),
+          errno: (error as any)?.errno,
+          syscall: (error as any)?.syscall,
+          address: (error as any)?.address,
+          port: (error as any)?.port
         });
         
-        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        // Exponential backoff with jitter
+        const backoffDelay = delayMs * attempt + Math.random() * 500;
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
       }
     }
     

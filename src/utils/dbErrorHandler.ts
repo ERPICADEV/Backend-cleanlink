@@ -45,6 +45,19 @@ export function isDatabaseConnectionError(error: any): boolean {
     'Connection terminated unexpectedly',
     'server closed the connection',
     'no connection to the server',
+    'getaddrinfo',
+    'ENOTFOUND',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'socket',
+    'broken pipe',
+    'write EPIPE',
+    'read ECONNRESET',
+    'connect ECONNREFUSED',
+    'connection lost',
+    'connection closed',
+    'unable to connect',
+    'failed to connect',
   ];
   
   // Check error code
@@ -92,12 +105,17 @@ export function isTableMissingError(error: any): boolean {
 
 export function handleDatabaseError(error: any, defaultMessage: string = 'Database operation failed') {
   if (isDatabaseConnectionError(error)) {
-    // Log detailed error information for debugging
-    console.error('Database connection error details:', {
+    // Always log detailed error information for debugging (even in production for connection errors)
+    console.error('❌ Database connection error details:', {
       code: error.code,
       message: error.message,
       name: error.name,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      errno: error.errno,
+      syscall: error.syscall,
+      address: error.address,
+      port: error.port,
+      // Include stack in production for connection errors to help diagnose
+      stack: error.stack ? error.stack.split('\n').slice(0, 5).join('\n') : undefined
     });
     
     return {

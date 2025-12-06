@@ -96,6 +96,14 @@ export const getMapReports = async (req: Request, res: Response) => {
     const errorResponse = handleDatabaseError(error, 'Failed to fetch map data');
     if (errorResponse.status === 503) {
       console.warn('⚠️  Database connection error in getMapReports');
+      // Additional logging for connection errors
+      console.error('Full error object:', {
+        code: (error as any)?.code,
+        message: (error as any)?.message,
+        name: (error as any)?.name,
+        errno: (error as any)?.errno,
+        syscall: (error as any)?.syscall
+      });
     } else {
       console.error('Get map reports error:', error);
     }

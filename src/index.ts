@@ -28,7 +28,7 @@ if (!process.env.DATABASE_URL) {
 
 // Import after dotenv.config() to ensure env vars are loaded
 import './utils/queue';
-import { pool } from './config/postgres';
+import { pool, warmUpPool } from './config/postgres';
 
 // Add error handlers for database connection
 pool.on('error', (err: Error & { code?: string }) => {
@@ -67,9 +67,11 @@ async function testDatabaseConnection() {
   }
 }
 
-// Test connection after a short delay to allow pool to initialize
-setTimeout(() => {
-  testDatabaseConnection();
+// Test connection and warm up pool after a short delay to allow pool to initialize
+setTimeout(async () => {
+  await testDatabaseConnection();
+  // Also warm up the pool
+  await warmUpPool();
 }, 1000);
 
 const app = express();
