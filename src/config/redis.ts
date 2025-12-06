@@ -1,26 +1,20 @@
-import Redis from 'ioredis';
+import Redis from "ioredis";
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  maxRetriesPerRequest: 3,
-  retryStrategy(times) {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
+export const redis = new Redis(process.env.REDIS_URL!, {
+  tls: {
+    rejectUnauthorized: false,
   },
-  // Add connection timeout
-  connectTimeout: 5000,
-  enableOfflineQueue: false, // Don't queue commands if disconnected
+  maxRetriesPerRequest: null,
+  enableReadyCheck: true,
+  enableOfflineQueue: true,
 });
 
-redis.on('connect', () => {
-  console.log('✅ Redis connected');
+redis.on("connect", () => {
+  console.log("🔗 Redis connected successfully");
 });
 
-redis.on('error', (err) => {
-  console.warn('⚠️  Redis error (non-blocking):', err.message);
-});
-
-redis.on('ready', () => {
-  console.log('✅ Redis ready');
+redis.on("error", (err) => {
+  console.error("⚠️ Redis error:", err.message);
 });
 
 export default redis;

@@ -1,4 +1,4 @@
-import redis from '../config/redis';
+import { redis } from '../config/redis';
 
 export const enqueueAIAnalysis = async (reportId: string) => {
   try {
@@ -8,17 +8,22 @@ export const enqueueAIAnalysis = async (reportId: string) => {
   }
 };
 
-export const processAIQueue = async () => {
-  try {
-    const reportId = await redis.rpop('ai_processing_queue');
-    if (reportId) {
-      const { processReportWithAI } = await import('../workers/aiWorker');
-      await processReportWithAI(reportId);
-    }
-  } catch (error) {
-    console.error('❌ AI queue processing error:', error);
-  }
-};
+// Start queue processor only after Redis is ready
+redis.once("ready", () => {
+  console.log("⚙️ Starting AI Queue Processor...");
 
-// Start queue processor
-setInterval(processAIQueue, 10000);
+  setInterval(async () => {
+    try {
+      const task = await redis.rpop("ai_processing_queue");
+      if (!task) return;
+
+      console.log("Processing AI task:", task);
+
+      // Process the task with existing AI logic
+      const { processReportWithAI } = await import('../workers/aiWorker');
+      await processReportWithAI(task);
+    } catch (err) {
+      console.error("❌ AI queue processing error:", err);
+    }
+  }, 10000); // Keep 10 second interval as before
+});

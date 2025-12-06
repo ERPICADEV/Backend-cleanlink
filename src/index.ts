@@ -5,7 +5,7 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import redis from './config/redis';
+import { redis } from './config/redis';
 import { authMiddleware } from './middleware/auth';
 import { adminMiddleware } from './middleware/adminRoles';
 import { getRolePermissions } from './lib/permissions';
