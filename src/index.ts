@@ -59,6 +59,21 @@ app.use('/internal/ai', aiRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/map', mapRoutes);
 
+// Root route - friendly message
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Welcome to CleanLink API',
+    service: 'cleanlink-api',
+    version: 'v1',
+    status: 'ok',
+    endpoints: {
+      api: '/api/v1',
+      health: '/health'
+    },
+    documentation: 'Visit /api/v1 for available API routes'
+  });
+});
+
 // Base API index to prevent "Cannot GET /api/v1"
 app.get('/api/v1', (req, res) => {
   res.json({
