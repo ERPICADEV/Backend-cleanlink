@@ -31,7 +31,7 @@ import './utils/queue';
 import { pool } from './config/postgres';
 
 // Add error handlers for database connection
-pool.on('error', (err) => {
+pool.on('error', (err: Error & { code?: string }) => {
   console.error('❌ Unexpected PostgreSQL pool error:', err);
   console.error('Error details:', {
     code: err.code,
