@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 export interface NotificationData {
   points_earned?: number;
   report_id?: string;
+  report_title?: string;
   new_level?: number;
   achievement?: string;
   reward_id?: string;

@@ -230,6 +230,28 @@ export const assignReport = async (req: Request, res: Response) => {
       })
     ])
 
+    // Send notification to the assigned field admin
+    try {
+      const adminUserResult = await pool.query('SELECT user_id FROM admins WHERE id = $1', [assigned_to])
+      const adminUser = adminUserResult.rows[0] as any
+      
+      if (adminUser && adminUser.user_id) {
+        await NotificationService.createNotification(
+          adminUser.user_id,
+          'report_assigned',
+          'New Report Assigned 📋',
+          `A new report "${report.title}" has been assigned to you for resolution.`,
+          {
+            report_id: id,
+            report_title: report.title
+          }
+        )
+      }
+    } catch (notifError) {
+      // Don't fail the assignment if notification fails
+      console.error('Failed to send assignment notification:', notifError)
+    }
+
     return res.status(200).json({
       id: id,
       status: 'assigned',
