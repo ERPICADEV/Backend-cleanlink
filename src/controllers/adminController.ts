@@ -14,7 +14,7 @@ export const getAdminReports = async (req: Request, res: Response) => {
       region,
       category,
       status,
-      sort = 'new',
+      sort = 'priority', // Default to priority sorting
       limit = 20
     } = req.query
 
@@ -55,7 +55,8 @@ export const getAdminReports = async (req: Request, res: Response) => {
         orderBy = 'ORDER BY r.upvotes DESC'
         break
       case 'priority':
-        orderBy = 'ORDER BY r.created_at ASC' // Oldest first for priority
+        // Priority sort will be handled after calculating priority_score
+        orderBy = 'ORDER BY r.created_at DESC' // Will be overridden
         break
     }
 
@@ -97,6 +98,23 @@ export const getAdminReports = async (req: Request, res: Response) => {
         console.error('Error parsing ai_score:', e)
       }
 
+      // Calculate priority_score: (legit * 0.4) + (severity * 0.6)
+      let priorityScore = 0.5 // Default if no AI score
+      let priorityLabel = 'Normal'
+      
+      if (aiScore && typeof aiScore.legit === 'number' && typeof aiScore.severity === 'number') {
+        priorityScore = (aiScore.legit * 0.4) + (aiScore.severity * 0.6)
+        
+        // Determine priority label
+        if (priorityScore >= 0.75) {
+          priorityLabel = 'Critical'
+        } else if (priorityScore >= 0.5) {
+          priorityLabel = 'High'
+        } else {
+          priorityLabel = 'Normal'
+        }
+      }
+
       return {
         id: report.id,
         title: report.title,
@@ -111,6 +129,8 @@ export const getAdminReports = async (req: Request, res: Response) => {
         assigned_to: report.assigned_to,
         assignedToName: report.assigned_admin_name || null,
         aiScore,
+        priority_score: priorityScore,
+        priority_label: priorityLabel,
         reporter: report.reporter_id ? {
           id: report.reporter_id,
           username: report.username,
@@ -128,6 +148,15 @@ export const getAdminReports = async (req: Request, res: Response) => {
         votes_count: report.votes_count,
       }
     })
+
+    // Sort by priority_score if sort is 'priority'
+    if (sort === 'priority') {
+      formattedReports.sort((a, b) => {
+        const scoreA = a.priority_score || 0
+        const scoreB = b.priority_score || 0
+        return scoreB - scoreA // Descending (highest priority first)
+      })
+    }
 
     return res.status(200).json({
       data: formattedReports,
