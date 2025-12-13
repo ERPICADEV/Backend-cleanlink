@@ -184,3 +184,19 @@ export const noViewerAccess = (req: Request, res: Response, next: NextFunction) 
   }
   next()
 }
+
+/**
+ * Middleware: Only Field Admin (admin role) can pass
+ * Blocks SuperAdmin and Viewers
+ */
+export const fieldAdminOnly = (req: Request, res: Response, next: NextFunction) => {
+  if (req.adminRole !== AdminRole.ADMIN) {
+    return res.status(403).json({
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Only Field Admin can perform this action',
+      },
+    })
+  }
+  next()
+}

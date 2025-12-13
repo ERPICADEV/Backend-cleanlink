@@ -17,7 +17,7 @@ import {
   getAdminStats
 } from '../controllers/adminController';
 import { authMiddleware } from '../middleware/auth';
-import { adminMiddleware, superAdminOnly } from '../middleware/adminMiddleware';
+import { adminMiddleware, superAdminOnly, assignedReportsOnly, fieldAdminOnly } from '../middleware/adminMiddleware';
 
 const router = Router();
 
@@ -54,7 +54,7 @@ router.patch('/reports/:id/submit-approval', submitForApproval);
 // Audit logs
 router.get('/audit/reports/:id', getReportAuditLogs);
 
-// Legacy resolve endpoint (SuperAdmin only) - keeping for backward compatibility
-router.patch('/reports/:id/resolve', superAdminOnly, resolveReport);
+// Resolve endpoint (Field Admin only - blocks SuperAdmin)
+router.patch('/reports/:id/resolve', fieldAdminOnly, assignedReportsOnly, resolveReport);
 
 export default router;

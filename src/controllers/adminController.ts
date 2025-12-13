@@ -302,10 +302,10 @@ export const resolveReport = async (req: Request, res: Response) => {
     const { id } = req.params
     const { cleaned_image_url, notes } = req.body
 
-    // 🔒 NEW: Only SuperAdmin can resolve reports
-    if (req.adminRole !== 'superadmin') {
+    // 🔒 NEW: Only Field Admin (admin role) can resolve reports
+    if (req.adminRole !== 'admin') {
       return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Only SuperAdmin can mark reports as resolved' },
+        error: { code: 'FORBIDDEN', message: 'Only Field Admin can mark reports as resolved' },
       })
     }
 
