@@ -300,7 +300,7 @@ export const assignReport = async (req: Request, res: Response) => {
 export const resolveReport = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const { cleaned_image_url, notes } = req.body
+    const { cleaned_image_url, notes, status } = req.body
 
     // 🔒 NEW: Only Field Admin (admin role) can resolve reports
     if (req.adminRole !== 'admin') {
@@ -356,19 +356,26 @@ export const resolveReport = async (req: Request, res: Response) => {
     try {
       await client.query('BEGIN')
       
-      // 1. Update report as resolved
+      // 1. Update report as resolved/invalid/duplicate based on status
+      // Status can be: 'resolved', 'invalid', 'duplicate', or 'cannot_fix' (treated as 'invalid')
+      const finalStatus = status === 'duplicate' ? 'duplicate' : 
+                         status === 'invalid' || status === 'cannot_fix' ? 'invalid' : 
+                         'resolved'
+      
       const mcdResolution = {
         cleaned_image_url,
         notes: notes || '',
         resolved_at: new Date().toISOString(),
         resolved_by: req.userId,
+        resolution_status: finalStatus,
       }
 
       await client.query(`
         UPDATE reports 
-        SET status = 'resolved', mcd_verified_by = $1, mcd_resolution = $2, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = $3
+        SET status = $1, mcd_verified_by = $2, mcd_resolution = $3, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $4
       `, [
+        finalStatus,
         req.userId,
         JSON.stringify(mcdResolution),
         id
@@ -482,9 +489,9 @@ export const resolveReport = async (req: Request, res: Response) => {
           cleaned_image_url,
           notes: notes || '',
           previous_status: report.status,
-          new_status: 'resolved',
+          new_status: finalStatus,
           resolved_by: req.userId,
-          points_awarded: report.reporter_id ? totalPoints : 0,
+          points_awarded: report.reporter_id && finalStatus === 'resolved' ? totalPoints : 0,
         })
       ])
       
