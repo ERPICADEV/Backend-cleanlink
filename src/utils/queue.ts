@@ -9,8 +9,8 @@ export const enqueueAIAnalysis = async (reportId: string) => {
   }
 };
 
-// Start queue processor only after Redis is ready
-redis.once("ready", () => {
+// Start queue processor - handle both cases: Redis already ready or not yet ready
+const startQueueProcessor = () => {
   console.log("⚙️ Starting AI Queue Processor...");
 
   // Process queue periodically (shorter interval for more responsive MVP)
@@ -28,4 +28,13 @@ redis.once("ready", () => {
       console.error("❌ AI queue processing error:", err);
     }
   }, 3000);
-});
+};
+
+// Check if Redis is already ready, otherwise wait for ready event
+if (redis.status === 'ready') {
+  startQueueProcessor();
+} else {
+  redis.once("ready", () => {
+    startQueueProcessor();
+  });
+}
