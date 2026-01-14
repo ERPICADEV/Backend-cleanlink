@@ -3,6 +3,7 @@ import { redis } from '../config/redis';
 export const enqueueAIAnalysis = async (reportId: string) => {
   try {
     await redis.lpush('ai_processing_queue', reportId);
+    console.log('📥 Queued AI analysis for report:', reportId);
   } catch (error) {
     console.error('❌ Failed to queue AI analysis:', error);
   }
@@ -12,6 +13,7 @@ export const enqueueAIAnalysis = async (reportId: string) => {
 redis.once("ready", () => {
   console.log("⚙️ Starting AI Queue Processor...");
 
+  // Process queue periodically (shorter interval for more responsive MVP)
   setInterval(async () => {
     try {
       const task = await redis.rpop("ai_processing_queue");
@@ -25,5 +27,5 @@ redis.once("ready", () => {
     } catch (err) {
       console.error("❌ AI queue processing error:", err);
     }
-  }, 10000); // Keep 10 second interval as before
+  }, 3000);
 });

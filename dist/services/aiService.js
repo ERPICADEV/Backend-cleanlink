@@ -15,7 +15,7 @@ class AIService {
             // Prepare prompt for the AI
             const prompt = this.createAnalysisPrompt(reportData);
             const response = await axios_1.default.post(`${this.baseURL}/chat/completions`, {
-                model: "openai/gpt-oss-20b:free", // Free model
+                model: "allenai/molmo-2-8b:free", // Free model
                 messages: [
                     {
                         role: "system",

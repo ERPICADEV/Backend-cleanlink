@@ -1,11 +1,12 @@
+// Defensive: ensure env is loaded even if this module is imported outside `src/index.ts`
+import dotenv from 'dotenv'
+dotenv.config()
+
 import { pool } from '../config/postgres'
 import { AIService, ReportForAnalysis } from '../services/aiService'
 
-const apiKey = process.env.OPENROUTER_API_KEY
-const aiService = new AIService(apiKey || '')
-
-// Feature flag for future vision AI
-const ENABLE_VISION_AI = false
+// MVP: enable vision insights when using a vision-capable model
+const ENABLE_VISION_AI = true
 
 // Add retry function for database queries
 const retryQuery = async (query: () => Promise<any>, maxRetries = 3) => {
@@ -61,6 +62,11 @@ function applyImageHeuristics(
 
 export const processReportWithAI = async (reportId: string) => {
   try {
+    console.log('🔍 Starting AI processing for report', reportId)
+
+    // Read the key at call time (module imports are cached, env may be set after startup)
+    const apiKey = process.env.OPENROUTER_API_KEY?.trim()
+
     if (!apiKey) {
       console.error('❌ Cannot process AI - OPENROUTER_API_KEY is missing from .env file')
       console.error('   Please add OPENROUTER_API_KEY=your_key_here to your .env file')
@@ -70,6 +76,9 @@ export const processReportWithAI = async (reportId: string) => {
     if (!apiKey.startsWith('sk-or-v1-')) {
       console.warn('⚠️  Warning: OPENROUTER_API_KEY format may be incorrect (should start with "sk-or-v1-")')
     }
+
+    // Create service per-call so we always use the latest env var
+    const aiService = new AIService(apiKey)
 
     // Use retry for database queries
     const report = await retryQuery(async () => {
@@ -152,7 +161,7 @@ export const processReportWithAI = async (reportId: string) => {
         insights: aiResult.insights,
         confidence_label: confidenceLabel,
         explanation: aiResult.explanation || 'Analysis completed based on report content and context.',
-        vision_insights: ENABLE_VISION_AI ? aiResult.vision_insights : null, // Placeholder for future
+        vision_insights: ENABLE_VISION_AI ? (aiResult.vision_insights || null) : null,
         heuristic_adjustments: heuristicAdjustments, // Store for debugging
         processed_at: new Date().toISOString(),
       }
@@ -171,7 +180,8 @@ export const processReportWithAI = async (reportId: string) => {
         reportId
       ])
     })
-    
+
+    console.log('✅ AI analysis saved for report', reportId)
   } catch (error) {
     console.error(`❌ AI processing failed for report ${reportId}:`, error)
   }

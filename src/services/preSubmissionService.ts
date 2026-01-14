@@ -14,19 +14,28 @@ export interface PreSubmissionSuggestions {
 export class PreSubmissionService {
   private apiKey: string;
   private baseURL: string = 'https://openrouter.ai/api/v1';
+  private model: string;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+    // Allow overriding the model without code changes
+    // Examples: "openai/gpt-4o-mini", "anthropic/claude-3.5-haiku"
+    this.model = process.env.OPENROUTER_MODEL?.trim() || "allenai/molmo-2-8b:free";
   }
 
   async getSuggestions(data: PreSubmissionData): Promise<PreSubmissionSuggestions> {
     try {
+      if (!this.apiKey?.trim()) {
+        // Non-blocking: if no key, just skip suggestions quietly
+        return { suggestions: [] };
+      }
+
       const prompt = this.createSuggestionPrompt(data);
       
       const response = await axios.post(
         `${this.baseURL}/chat/completions`,
         {
-          model: "openai/gpt-oss-20b:free",
+          model: this.model,
           messages: [
             {
               role: "system",
@@ -53,7 +62,16 @@ export class PreSubmissionService {
       
     } catch (error: any) {
       // Graceful fallback - return empty suggestions on failure
-      console.error('Pre-submission suggestions error:', error.message);
+      if (error?.response) {
+        console.error('Pre-submission suggestions error:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data,
+          model: this.model,
+        });
+      } else {
+        console.error('Pre-submission suggestions error:', error?.message || error);
+      }
       return { suggestions: [] };
     }
   }

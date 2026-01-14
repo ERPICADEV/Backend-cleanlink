@@ -23,20 +23,46 @@ export interface ReportForAnalysis {
 export class AIService {
   private apiKey: string;
   private baseURL: string = 'https://openrouter.ai/api/v1';
+  private model: string;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+    this.model = process.env.OPENROUTER_MODEL?.trim() || "allenai/molmo-2-8b:free";
   }
 
   async analyzeReport(reportData: ReportForAnalysis): Promise<AIAnalysisResult> {
     try {
-      // Prepare prompt for the AI
+      // Prepare prompt and image payload for the AI
       const prompt = this.createAnalysisPrompt(reportData);
+
+      // Try to extract image URLs from reportData.images (MVP: assume they are URLs or { url })
+      const imageUrls: string[] = Array.isArray(reportData.images)
+        ? reportData.images
+            .map((img: any) => {
+              if (!img) return null;
+              if (typeof img === 'string') return img;
+              if (typeof img === 'object' && typeof img.url === 'string') return img.url;
+              return null;
+            })
+            .filter((u: string | null): u is string => !!u)
+        : [];
+
+      // Build messages payload; for vision models we send text + images together
+      const userContent: any =
+        imageUrls.length > 0
+          ? [
+              { type: 'text', text: prompt },
+              ...imageUrls.map((url) => ({
+                type: 'image_url',
+                image_url: { url },
+              })),
+            ]
+          : prompt;
       
       const response = await axios.post(
         `${this.baseURL}/chat/completions`,
         {
-          model: "openai/gpt-oss-20b:free", // Free model
+          model: this.model,
           messages: [
             {
               role: "system",
@@ -44,7 +70,7 @@ export class AIService {
             },
             {
               role: "user",
-              content: prompt
+              content: userContent
             }
           ],
           max_tokens: 500
@@ -66,14 +92,21 @@ export class AIService {
       if (error.response) {
         const status = error.response.status;
         const statusText = error.response.statusText;
+        const data = error.response.data;
         
         if (status === 401) {
           console.error('❌ AI Service: Unauthorized (401) - Check your OPENROUTER_API_KEY in .env file');
           console.error('   The API key may be invalid, expired, or missing');
+          console.error('   Debug:', { model: this.model });
         } else if (status === 429) {
           console.error('❌ AI Service: Rate limit exceeded (429) - Too many requests');
+          console.error('   Debug:', { model: this.model });
+        } else if (status === 404) {
+          console.error('❌ AI Service: Not found (404) - Model or endpoint may be invalid');
+          console.error('   Debug:', { model: this.model, data });
         } else {
           console.error(`❌ AI Service error: ${status} ${statusText}`);
+          console.error('   Debug:', { model: this.model, data });
         }
       } else if (error.request) {
         console.error('❌ AI Service: No response from OpenRouter API - Check your internet connection');
@@ -95,6 +128,7 @@ export class AIService {
   }
 
   private createAnalysisPrompt(reportData: ReportForAnalysis): string {
+    const hasImages = Array.isArray(reportData.images) && reportData.images.length > 0;
     return `
 Analyze this civic report and provide a JSON response with:
 
@@ -104,6 +138,7 @@ Analyze this civic report and provide a JSON response with:
 4. insights: array of key insights
 5. confidence_label: string enum - "low" (legit < 0.3), "medium" (0.3 ≤ legit < 0.7), "high" (0.7 ≤ legit < 0.85), "very_high" (legit ≥ 0.85)
 6. explanation: short human-readable sentence (1-2 lines max) explaining WHY you gave these legitimacy and severity scores. Be calm, neutral, and civic-friendly. Do NOT mention AI uncertainty or model limitations.
+7. vision_insights: array of 2-5 short strings describing what you can see in the image(s) and whether it matches the report (e.g. ["visible trash bags near curb", "image matches described location", "no people visible"]). If the image(s) are blank, unrelated, or cannot be interpreted, say so plainly (e.g. ["image unclear/blank/unrelated"]).
 
 Report Details:
 - Title: ${reportData.title}
@@ -117,9 +152,10 @@ Consider:
 - Is this a common issue in civic reporting?
 - Are there red flags for fake reports?
 - How urgent does this seem?
+${hasImages ? `- IMPORTANT: You MUST use the image(s) to inform the scores and MUST mention image evidence in "explanation".` : ''}
 
 Respond ONLY with valid JSON, no other text.
-Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["genuine_report", "medium_urgency"], "confidence_label": "high", "explanation": "The detailed description and multiple images provide strong evidence of a legitimate civic issue requiring attention."}
+Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["genuine_report", "medium_urgency"], "confidence_label": "high", "vision_insights": ["trash bags visible on roadside", "image supports the report description"], "explanation": "The photo shows roadside trash consistent with the description, indicating a legitimate issue with moderate urgency."}
     `;
   }
 
