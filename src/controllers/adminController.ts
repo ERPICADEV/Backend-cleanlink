@@ -14,7 +14,7 @@ export const getAdminReports = async (req: Request, res: Response) => {
       region,
       category,
       status,
-      sort = 'new',
+      sort = 'priority', // Default to priority sorting
       limit = 20
     } = req.query
 
@@ -55,7 +55,8 @@ export const getAdminReports = async (req: Request, res: Response) => {
         orderBy = 'ORDER BY r.upvotes DESC'
         break
       case 'priority':
-        orderBy = 'ORDER BY r.created_at ASC' // Oldest first for priority
+        // Priority sort will be handled after calculating priority_score
+        orderBy = 'ORDER BY r.created_at DESC' // Will be overridden
         break
     }
 
@@ -97,6 +98,23 @@ export const getAdminReports = async (req: Request, res: Response) => {
         console.error('Error parsing ai_score:', e)
       }
 
+      // Calculate priority_score: (legit * 0.4) + (severity * 0.6)
+      let priorityScore = 0.5 // Default if no AI score
+      let priorityLabel = 'Normal'
+      
+      if (aiScore && typeof aiScore.legit === 'number' && typeof aiScore.severity === 'number') {
+        priorityScore = (aiScore.legit * 0.4) + (aiScore.severity * 0.6)
+        
+        // Determine priority label
+        if (priorityScore >= 0.75) {
+          priorityLabel = 'Critical'
+        } else if (priorityScore >= 0.5) {
+          priorityLabel = 'High'
+        } else {
+          priorityLabel = 'Normal'
+        }
+      }
+
       return {
         id: report.id,
         title: report.title,
@@ -111,6 +129,8 @@ export const getAdminReports = async (req: Request, res: Response) => {
         assigned_to: report.assigned_to,
         assignedToName: report.assigned_admin_name || null,
         aiScore,
+        priority_score: priorityScore,
+        priority_label: priorityLabel,
         reporter: report.reporter_id ? {
           id: report.reporter_id,
           username: report.username,
@@ -128,6 +148,15 @@ export const getAdminReports = async (req: Request, res: Response) => {
         votes_count: report.votes_count,
       }
     })
+
+    // Sort by priority_score if sort is 'priority'
+    if (sort === 'priority') {
+      formattedReports.sort((a, b) => {
+        const scoreA = a.priority_score || 0
+        const scoreB = b.priority_score || 0
+        return scoreB - scoreA // Descending (highest priority first)
+      })
+    }
 
     return res.status(200).json({
       data: formattedReports,
@@ -271,12 +300,12 @@ export const assignReport = async (req: Request, res: Response) => {
 export const resolveReport = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const { cleaned_image_url, notes } = req.body
+    const { cleaned_image_url, notes, status } = req.body
 
-    // 🔒 NEW: Only SuperAdmin can resolve reports
-    if (req.adminRole !== 'superadmin') {
+    // 🔒 NEW: Only Field Admin (admin role) can resolve reports
+    if (req.adminRole !== 'admin') {
       return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Only SuperAdmin can mark reports as resolved' },
+        error: { code: 'FORBIDDEN', message: 'Only Field Admin can mark reports as resolved' },
       })
     }
 
@@ -327,19 +356,26 @@ export const resolveReport = async (req: Request, res: Response) => {
     try {
       await client.query('BEGIN')
       
-      // 1. Update report as resolved
+      // 1. Update report as resolved/invalid/duplicate based on status
+      // Status can be: 'resolved', 'invalid', 'duplicate', or 'cannot_fix' (treated as 'invalid')
+      const finalStatus = status === 'duplicate' ? 'duplicate' : 
+                         status === 'invalid' || status === 'cannot_fix' ? 'invalid' : 
+                         'resolved'
+      
       const mcdResolution = {
         cleaned_image_url,
         notes: notes || '',
         resolved_at: new Date().toISOString(),
         resolved_by: req.userId,
+        resolution_status: finalStatus,
       }
 
       await client.query(`
         UPDATE reports 
-        SET status = 'resolved', mcd_verified_by = $1, mcd_resolution = $2, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = $3
+        SET status = $1, mcd_verified_by = $2, mcd_resolution = $3, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $4
       `, [
+        finalStatus,
         req.userId,
         JSON.stringify(mcdResolution),
         id
@@ -453,9 +489,9 @@ export const resolveReport = async (req: Request, res: Response) => {
           cleaned_image_url,
           notes: notes || '',
           previous_status: report.status,
-          new_status: 'resolved',
+          new_status: finalStatus,
           resolved_by: req.userId,
-          points_awarded: report.reporter_id ? totalPoints : 0,
+          points_awarded: report.reporter_id && finalStatus === 'resolved' ? totalPoints : 0,
         })
       ])
       

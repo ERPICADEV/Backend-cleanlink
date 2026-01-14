@@ -6,6 +6,9 @@ export interface AIAnalysisResult {
   duplicate_prob: number;
   insights: string[];
   duplicate_of?: string;
+  confidence_label?: string; // "low" | "medium" | "high" | "very_high"
+  explanation?: string; // Human-readable explanation
+  vision_insights?: string[] | null; // Placeholder for future vision AI
   success: boolean; // Indicates if this is a real analysis or fallback
 }
 
@@ -84,6 +87,8 @@ export class AIService {
         severity: 0.5,
         duplicate_prob: 0,
         insights: ['ai_service_unavailable'],
+        confidence_label: 'medium',
+        explanation: 'Analysis temporarily unavailable.',
         success: false
       };
     }
@@ -97,6 +102,8 @@ Analyze this civic report and provide a JSON response with:
 2. severity: how serious the issue is (0-1)  
 3. duplicate_prob: probability this is duplicate (0-1)
 4. insights: array of key insights
+5. confidence_label: string enum - "low" (legit < 0.3), "medium" (0.3 ≤ legit < 0.7), "high" (0.7 ≤ legit < 0.85), "very_high" (legit ≥ 0.85)
+6. explanation: short human-readable sentence (1-2 lines max) explaining WHY you gave these legitimacy and severity scores. Be calm, neutral, and civic-friendly. Do NOT mention AI uncertainty or model limitations.
 
 Report Details:
 - Title: ${reportData.title}
@@ -112,16 +119,31 @@ Consider:
 - How urgent does this seem?
 
 Respond ONLY with valid JSON, no other text.
-Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["genuine_report", "medium_urgency"]}
+Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["genuine_report", "medium_urgency"], "confidence_label": "high", "explanation": "The detailed description and multiple images provide strong evidence of a legitimate civic issue requiring attention."}
     `;
   }
 
   private parseAIResponse(response: string): AIAnalysisResult {
     try {
       // Extract JSON from response
-      const jsonMatch = response.match(/\{.*\}/);
+      const jsonMatch = response.match(/\{.*\}/s); // 's' flag for multiline
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        
+        // Calculate confidence_label if not provided
+        if (!parsed.confidence_label && parsed.legit !== undefined) {
+          const legit = parsed.legit;
+          if (legit >= 0.85) parsed.confidence_label = 'very_high';
+          else if (legit >= 0.7) parsed.confidence_label = 'high';
+          else if (legit >= 0.3) parsed.confidence_label = 'medium';
+          else parsed.confidence_label = 'low';
+        }
+        
+        // Ensure explanation exists
+        if (!parsed.explanation) {
+          parsed.explanation = 'Analysis completed based on report content and context.';
+        }
+        
         return { ...parsed, success: true };
       }
     } catch (error) {
@@ -134,6 +156,8 @@ Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["ge
       severity: 0.5,
       duplicate_prob: 0,
       insights: ['response_parse_failed'],
+      confidence_label: 'medium',
+      explanation: 'Analysis temporarily unavailable.',
       success: false
     };
   }

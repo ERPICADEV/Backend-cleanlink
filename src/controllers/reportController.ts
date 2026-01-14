@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { enqueueAIAnalysis } from '../utils/queue';
 import { handleDatabaseError } from '../utils/dbErrorHandler';
 import { withRetry } from '../utils/databaseRetry';
+import { PreSubmissionService } from '../services/preSubmissionService';
 
 // GET /api/v1/reports (feed)
 export const getReports = async (req: Request, res: Response) => {
@@ -491,6 +492,36 @@ export const updateReport = async (req: Request, res: Response) => {
     res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: 'Failed to update report' },
     });
+  }
+};
+
+// POST /api/v1/reports/pre-submission-suggestions
+export const getPreSubmissionSuggestions = async (req: Request, res: Response) => {
+  try {
+    const { title, description, category, images } = req.body;
+
+    // Validate required fields
+    if (!title || !description || !category) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Title, description, and category are required' },
+      });
+    }
+
+    const apiKey = process.env.OPENROUTER_API_KEY || '';
+    const service = new PreSubmissionService(apiKey);
+
+    const suggestions = await service.getSuggestions({
+      title: title.trim(),
+      description: description.trim(),
+      category: category.toLowerCase(),
+      imageCount: Array.isArray(images) ? images.length : (images ? 1 : 0),
+    });
+
+    return res.status(200).json(suggestions);
+  } catch (error) {
+    console.error('Pre-submission suggestions error:', error);
+    // Return empty suggestions on error (non-blocking)
+    return res.status(200).json({ suggestions: [] });
   }
 };
 
