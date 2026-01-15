@@ -4,6 +4,10 @@ import { hashPassword, verifyPassword } from '../utils/password';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwt';
 import { randomUUID } from 'crypto';
 import { AdminRole, getRolePermissions } from '../lib/permissions';
+import { OAuth2Client } from 'google-auth-library';
+
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleOAuthClient = new OAuth2Client(googleClientId);
 
 // Helper to safely parse region (handles both JSON strings and plain strings)
 const parseRegion = (regionStr: string | null): string | Record<string, unknown> | null => {
@@ -255,6 +259,165 @@ export const login = async (req: Request, res: Response) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Login failed',
+      },
+    });
+  }
+};
+
+// GET /api/v1/auth/google/client-id
+export const getGoogleClientId = async (_req: Request, res: Response) => {
+  if (!googleClientId) {
+    return res.status(500).json({
+      error: {
+        code: 'CONFIG_ERROR',
+        message: 'GOOGLE_CLIENT_ID is not configured on the server',
+      },
+    });
+  }
+  return res.status(200).json({ client_id: googleClientId });
+};
+
+// POST /api/v1/auth/google
+// Google Sign-In (ID token) verification ONLY. No auth code flow, no client secret.
+export const googleAuth = async (req: Request, res: Response) => {
+  try {
+    const { idToken } = req.body as { idToken?: string };
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'idToken is required',
+        },
+      });
+    }
+
+    if (!googleClientId) {
+      return res.status(500).json({
+        error: {
+          code: 'CONFIG_ERROR',
+          message: 'GOOGLE_CLIENT_ID is not configured on the server',
+        },
+      });
+    }
+
+    // Verify ID token against Google's public keys and validate audience
+    const ticket = await googleOAuthClient.verifyIdToken({
+      idToken,
+      audience: googleClientId,
+    });
+
+    const payload = ticket.getPayload();
+    if (!payload) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'Invalid Google ID token' },
+      });
+    }
+
+    const googleSub = payload.sub;
+    const email = payload.email?.toLowerCase();
+    const name = payload.name || null;
+    const picture = payload.picture || null;
+
+    if (!googleSub || !email) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'Google token missing required claims' },
+      });
+    }
+
+    // Find by email (MVP). Store google sub inside auth_providers JSON.
+    const existingResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    let user: any = existingResult.rows[0];
+
+    if (!user) {
+      const userId = randomUUID();
+
+      // Username: prefer email prefix; ensure uniqueness
+      const baseUsername = (email.split('@')[0] || 'user').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 30);
+      let finalUsername = baseUsername || 'user';
+      const usernameCheck = await pool.query('SELECT 1 FROM users WHERE username = $1', [finalUsername]);
+      if (usernameCheck.rows.length > 0) {
+        finalUsername = `${finalUsername}_${Math.random().toString(36).slice(2, 6)}`.slice(0, 30);
+      }
+
+      const authProviders = JSON.stringify([{ provider: 'google', provider_id: googleSub }]);
+
+      await pool.query(
+        `
+        INSERT INTO users (
+          id, username, email, phone, password_hash, region, auth_providers,
+          avatar_url, bio, civic_points, civic_level, trust_score, status, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `,
+        [
+          userId,
+          finalUsername,
+          email,
+          null,
+          null,
+          null,
+          authProviders,
+          picture,
+          null,
+          0,
+          1,
+          0.5,
+          'active',
+        ]
+      );
+
+      const created = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+      user = created.rows[0];
+    } else {
+      // Ensure google provider is recorded (best-effort)
+      try {
+        const parsed = user.auth_providers ? JSON.parse(user.auth_providers) : [];
+        const hasGoogle = Array.isArray(parsed) && parsed.some((p: any) => p?.provider === 'google' && p?.provider_id === googleSub);
+        if (!hasGoogle) {
+          const next = Array.isArray(parsed) ? [...parsed, { provider: 'google', provider_id: googleSub }] : [{ provider: 'google', provider_id: googleSub }];
+          await pool.query('UPDATE users SET auth_providers = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [
+            JSON.stringify(next),
+            user.id,
+          ]);
+        }
+      } catch {
+        // ignore
+      }
+
+      // Optionally update avatar/name on login (MVP: only avatar_url if missing)
+      if (!user.avatar_url && picture) {
+        await pool.query('UPDATE users SET avatar_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [picture, user.id]);
+      }
+    }
+
+    // Check if user is an admin and get admin role (same as password login)
+    const adminResult = await pool.query('SELECT role, status, region_assigned FROM admins WHERE user_id = $1', [user.id]);
+    const adminInfo: any = adminResult.rows[0];
+
+    const accessToken = generateAccessToken(user.id, user.email || undefined);
+    const refreshToken = generateRefreshToken(user.id);
+
+    return res.status(200).json({
+      user: {
+        id: user.id,
+        username: user.username || name,
+        email: user.email,
+        region: parseRegion(user.region),
+        civicPoints: user.civic_points ?? 0,
+        role: mapAdminRole(adminInfo?.role),
+        adminRegion: adminInfo?.region_assigned || null,
+        permissions: adminInfo?.role ? getRolePermissions(adminInfo.role as AdminRole) : [],
+        avatarUrl: user.avatar_url || picture,
+      },
+      token: accessToken,
+      refresh_token: refreshToken,
+    });
+  } catch (error: any) {
+    // google-auth-library throws on invalid/expired tokens
+    console.error('Google auth error:', error?.message || error);
+    return res.status(401).json({
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Invalid or expired Google ID token',
       },
     });
   }

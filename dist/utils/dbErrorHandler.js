@@ -1,0 +1,147 @@
+"use strict";
+/**
+ * Utility to handle database errors gracefully
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.isDatabaseConnectionError = isDatabaseConnectionError;
+exports.isTableMissingError = isTableMissingError;
+exports.handleDatabaseError = handleDatabaseError;
+function isDatabaseConnectionError(error) {
+    if (!error)
+        return false;
+    // Check for common connection error codes
+    const connectionErrorCodes = [
+        'ECONNREFUSED',
+        'ENOTFOUND',
+        'ETIMEDOUT',
+        'ECONNRESET',
+        'ETIMEDOUT',
+        'ENETUNREACH',
+        'EHOSTUNREACH'
+    ];
+    // PostgreSQL-specific error codes for connection issues
+    const postgresConnectionErrorCodes = [
+        '57P01', // admin_shutdown
+        '57P02', // crash_shutdown
+        '57P03', // cannot_connect_now
+        '08003', // connection_does_not_exist
+        '08006', // connection_failure
+        '08001', // sqlclient_unable_to_establish_sqlconnection
+        '08004', // sqlserver_rejected_establishment_of_sqlconnection
+        '08000', // connection_exception
+        '53300', // too_many_connections
+        '57P04', // database_shutdown
+    ];
+    const connectionErrorMessages = [
+        'connection',
+        'connect',
+        'database',
+        'postgres',
+        'timeout',
+        'refused',
+        'network',
+        'unreachable',
+        'pool',
+        'client has been closed',
+        'Connection terminated',
+        'Connection terminated unexpectedly',
+        'server closed the connection',
+        'no connection to the server',
+        'getaddrinfo',
+        'ENOTFOUND',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'socket',
+        'broken pipe',
+        'write EPIPE',
+        'read ECONNRESET',
+        'connect ECONNREFUSED',
+        'connection lost',
+        'connection closed',
+        'unable to connect',
+        'failed to connect',
+    ];
+    // Check error code
+    if (error.code) {
+        if (connectionErrorCodes.includes(error.code) || postgresConnectionErrorCodes.includes(error.code)) {
+            return true;
+        }
+    }
+    // Check PostgreSQL error code (different property)
+    if (error.code && postgresConnectionErrorCodes.includes(error.code)) {
+        return true;
+    }
+    // Check error message
+    const errorMessage = String(error.message || '').toLowerCase();
+    if (connectionErrorMessages.some(msg => errorMessage.includes(msg))) {
+        return true;
+    }
+    // Check for AggregateError with connection errors
+    if (error.errors && Array.isArray(error.errors)) {
+        return error.errors.some((e) => isDatabaseConnectionError(e));
+    }
+    return false;
+}
+function isTableMissingError(error) {
+    if (!error)
+        return false;
+    // PostgreSQL error code for "relation does not exist"
+    if (error.code === '42P01') {
+        return true;
+    }
+    // Check error message
+    const errorMessage = String(error.message || '').toLowerCase();
+    if (errorMessage.includes('relation') && errorMessage.includes('does not exist')) {
+        return true;
+    }
+    return false;
+}
+function handleDatabaseError(error, defaultMessage = 'Database operation failed') {
+    if (isDatabaseConnectionError(error)) {
+        // Always log detailed error information for debugging (even in production for connection errors)
+        console.error('❌ Database connection error details:', {
+            code: error.code,
+            message: error.message,
+            name: error.name,
+            errno: error.errno,
+            syscall: error.syscall,
+            address: error.address,
+            port: error.port,
+            // Include stack in production for connection errors to help diagnose
+            stack: error.stack ? error.stack.split('\n').slice(0, 5).join('\n') : undefined
+        });
+        return {
+            status: 503, // Service Unavailable
+            error: {
+                code: 'DATABASE_UNAVAILABLE',
+                message: 'Database connection failed. Please check your DATABASE_URL and ensure PostgreSQL is running.',
+                details: process.env.NODE_ENV === 'development'
+                    ? `Connection error: ${error.code || error.message}`
+                    : undefined
+            }
+        };
+    }
+    if (isTableMissingError(error)) {
+        return {
+            status: 503, // Service Unavailable
+            error: {
+                code: 'SCHEMA_NOT_INITIALIZED',
+                message: 'Database tables do not exist. Please run the database schema migration.',
+                details: process.env.NODE_ENV === 'development'
+                    ? `Run: psql $DATABASE_URL -f schema.sql or use the migration script`
+                    : undefined
+            }
+        };
+    }
+    // Other database errors
+    return {
+        status: 500,
+        error: {
+            code: 'DATABASE_ERROR',
+            message: defaultMessage,
+            details: process.env.NODE_ENV === 'development'
+                ? error.message
+                : undefined
+        }
+    };
+}

@@ -32,33 +32,44 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processAIQueue = exports.enqueueAIAnalysis = void 0;
-const redis_1 = __importDefault(require("../config/redis"));
+exports.enqueueAIAnalysis = void 0;
+const redis_1 = require("../config/redis");
 const enqueueAIAnalysis = async (reportId) => {
     try {
-        await redis_1.default.lpush('ai_processing_queue', reportId);
+        await redis_1.redis.lpush('ai_processing_queue', reportId);
+        console.log('📥 Queued AI analysis for report:', reportId);
     }
     catch (error) {
         console.error('❌ Failed to queue AI analysis:', error);
     }
 };
 exports.enqueueAIAnalysis = enqueueAIAnalysis;
-const processAIQueue = async () => {
-    try {
-        const reportId = await redis_1.default.rpop('ai_processing_queue');
-        if (reportId) {
+// Start queue processor - handle both cases: Redis already ready or not yet ready
+const startQueueProcessor = () => {
+    console.log("⚙️ Starting AI Queue Processor...");
+    // Process queue periodically (shorter interval for more responsive MVP)
+    setInterval(async () => {
+        try {
+            const task = await redis_1.redis.rpop("ai_processing_queue");
+            if (!task)
+                return;
+            console.log("Processing AI task:", task);
+            // Process the task with existing AI logic
             const { processReportWithAI } = await Promise.resolve().then(() => __importStar(require('../workers/aiWorker')));
-            await processReportWithAI(reportId);
+            await processReportWithAI(task);
         }
-    }
-    catch (error) {
-        console.error('❌ AI queue processing error:', error);
-    }
+        catch (err) {
+            console.error("❌ AI queue processing error:", err);
+        }
+    }, 3000);
 };
-exports.processAIQueue = processAIQueue;
-// Start queue processor
-setInterval(exports.processAIQueue, 10000);
+// Check if Redis is already ready, otherwise wait for ready event
+if (redis_1.redis.status === 'ready') {
+    startQueueProcessor();
+}
+else {
+    redis_1.redis.once("ready", () => {
+        startQueueProcessor();
+    });
+}

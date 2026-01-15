@@ -2,7 +2,9 @@ import { Router, Request, Response } from 'express';
 import { 
   signup, 
   login, 
-  refreshTokenHandler 
+  refreshTokenHandler,
+  googleAuth,
+  getGoogleClientId
 } from '../controllers/authController';
 
 const router = Router();
@@ -11,6 +13,8 @@ const router = Router();
 router.post('/signup', signup);
 router.post('/login', login);
 router.post('/refresh', refreshTokenHandler);
+router.post('/google', googleAuth);
+router.get('/google/client-id', getGoogleClientId);
 
 // Handle GET requests to auth routes with helpful error message
 router.get('/signup', (req: Request, res: Response) => {

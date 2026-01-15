@@ -1,14 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const userController_sqlite_1 = require("../controllers/userController-sqlite");
+const userController_1 = require("../controllers/userController");
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
-// SQLite endpoints
-router.get('/me', auth_1.authMiddleware, userController_sqlite_1.getMe);
-router.patch('/me', auth_1.authMiddleware, userController_sqlite_1.updateMe);
-router.get('/me/comments', auth_1.authMiddleware, userController_sqlite_1.getMyComments);
-router.get('/:id/public', userController_sqlite_1.getPublicProfile);
-router.get('/regions', userController_sqlite_1.getRegions);
-router.patch('/me/region', auth_1.authMiddleware, userController_sqlite_1.updateRegion);
+router.get('/me', auth_1.authMiddleware, userController_1.getMe);
+router.patch('/me', auth_1.authMiddleware, userController_1.updateMe);
+router.get('/me/comments', auth_1.authMiddleware, userController_1.getMyComments);
+router.get('/:id/public', userController_1.getPublicProfile);
+router.get('/regions', userController_1.getRegions);
+router.patch('/me/region', auth_1.authMiddleware, userController_1.updateRegion);
 exports.default = router;

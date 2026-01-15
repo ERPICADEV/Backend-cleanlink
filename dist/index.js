@@ -36,15 +36,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// Load environment variables FIRST before any other imports
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
-const dotenv_1 = __importDefault(require("dotenv"));
-const redis_1 = __importDefault(require("./config/redis"));
+const redis_1 = require("./config/redis");
 const auth_1 = require("./middleware/auth");
 const adminRoles_1 = require("./middleware/adminRoles");
 const permissions_1 = require("./lib/permissions");
-// Import SQLite routes
+// Import routes
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const userRoutes_1 = __importDefault(require("./routes/userRoutes"));
 const reportRoutes_1 = __importDefault(require("./routes/reportRoutes"));
@@ -55,16 +57,59 @@ const rewardRoutes_1 = __importDefault(require("./routes/rewardRoutes"));
 const aiRoutes_1 = __importDefault(require("./routes/aiRoutes"));
 const notificationRoutes_1 = __importDefault(require("./routes/notificationRoutes"));
 const mapRoutes_1 = __importDefault(require("./routes/mapRoutes"));
+// Check critical environment variables
+if (!process.env.DATABASE_URL) {
+    console.warn('⚠️  WARNING: DATABASE_URL is not set in environment variables');
+}
+// Import after dotenv.config() to ensure env vars are loaded
 require("./utils/queue");
 const postgres_1 = require("./config/postgres");
-dotenv_1.default.config();
+// Add error handlers for database connection
+postgres_1.pool.on('error', (err) => {
+    console.error('❌ Unexpected PostgreSQL pool error:', err);
+    console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+    });
+});
+postgres_1.pool.on('connect', (client) => {
+    console.log('✅ PostgreSQL client connected');
+});
+postgres_1.pool.on('acquire', () => {
+    // Connection acquired from pool
+});
+postgres_1.pool.on('remove', () => {
+    // Connection removed from pool
+});
+// Test database connection on startup
+async function testDatabaseConnection() {
+    try {
+        const result = await postgres_1.pool.query('SELECT NOW() as current_time');
+        console.log('✅ Database connection test successful:', result.rows[0].current_time);
+    }
+    catch (error) {
+        console.error('❌ Database connection test failed:', {
+            code: error.code,
+            message: error.message,
+            name: error.name
+        });
+        console.error('⚠️  Server will start but database operations may fail');
+    }
+}
+// Test connection and warm up pool after a short delay to allow pool to initialize
+setTimeout(async () => {
+    await testDatabaseConnection();
+    // Also warm up the pool
+    await (0, postgres_1.warmUpPool)();
+}, 1000);
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
-// SQLite Routes ONLY
+// API Routes
 app.use('/api/v1/auth', authRoutes_1.default);
 app.use('/api/v1/users', userRoutes_1.default);
 app.use('/api/v1/reports', reportRoutes_1.default);
@@ -75,6 +120,20 @@ app.use('/api/v1/rewards', rewardRoutes_1.default);
 app.use('/internal/ai', aiRoutes_1.default);
 app.use('/api/v1/notifications', notificationRoutes_1.default);
 app.use('/api/v1/map', mapRoutes_1.default);
+// Root route - friendly message
+app.get('/', (req, res) => {
+    res.json({
+        message: 'Welcome to CleanLink API',
+        service: 'cleanlink-api',
+        version: 'v1',
+        status: 'ok',
+        endpoints: {
+            api: '/api/v1',
+            health: '/health'
+        },
+        documentation: 'Visit /api/v1 for available API routes'
+    });
+});
 // Base API index to prevent "Cannot GET /api/v1"
 app.get('/api/v1', (req, res) => {
     res.json({
@@ -99,7 +158,7 @@ app.get('/health', async (req, res) => {
         // Test PostgreSQL connection
         await postgres_1.pool.query('SELECT 1');
         // Test Redis connection
-        await redis_1.default.ping();
+        await redis_1.redis.ping();
         res.json({
             status: 'ok',
             service: 'cleanlink-api',
@@ -113,21 +172,6 @@ app.get('/health', async (req, res) => {
             service: 'cleanlink-api',
             error: 'Service unavailable'
         });
-    }
-});
-// Test endpoints
-app.get('/sqlite-reports', async (req, res) => {
-    try {
-        const result = await postgres_1.pool.query('SELECT id, title, upvotes, downvotes FROM reports LIMIT 10');
-        const reports = result.rows;
-        res.json({
-            data: reports,
-            count: reports.length,
-            message: 'Reports from PostgreSQL database'
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
     }
 });
 // Test endpoint - add after other routes
@@ -160,24 +204,10 @@ app.get('/debug/admins', auth_1.authMiddleware, adminRoles_1.adminMiddleware, as
         res.status(500).json({ error: error.message });
     }
 });
-app.get('/sqlite-reports/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
-        const report = result.rows[0];
-        if (!report) {
-            return res.status(404).json({ error: 'Report not found' });
-        }
-        res.json(report);
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 // Debug routes
 app.get('/debug/queue-status', async (req, res) => {
     try {
-        const queueLength = await redis_1.default.llen('ai_processing_queue');
+        const queueLength = await redis_1.redis.llen('ai_processing_queue');
         res.json({
             queue_system: 'active',
             pending_jobs: queueLength,
@@ -226,7 +256,55 @@ app.post('/debug/add-to-queue/:reportId', async (req, res) => {
         });
     }
 });
+// Global error handler middleware - must be after all routes
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    // Check if it's a database connection error
+    const isDbError = err.code === 'ECONNREFUSED' ||
+        err.code === 'ENOTFOUND' ||
+        err.code === 'ETIMEDOUT' ||
+        err.message?.toLowerCase().includes('connection') ||
+        err.message?.toLowerCase().includes('database') ||
+        err.message?.toLowerCase().includes('postgres');
+    if (isDbError) {
+        return res.status(503).json({
+            error: {
+                code: 'DATABASE_UNAVAILABLE',
+                message: 'Database connection unavailable. Please try again later.',
+            }
+        });
+    }
+    // Check if it's a Redis connection error
+    const isRedisError = err.message?.toLowerCase().includes('redis') ||
+        err.message?.toLowerCase().includes('connection refused');
+    if (isRedisError) {
+        return res.status(503).json({
+            error: {
+                code: 'REDIS_UNAVAILABLE',
+                message: 'Cache service unavailable. Please try again later.',
+            }
+        });
+    }
+    // Default error response
+    res.status(err.status || 500).json({
+        error: {
+            code: err.code || 'INTERNAL_ERROR',
+            message: err.message || 'An unexpected error occurred',
+        }
+    });
+});
+// 404 handler - must be after all routes and error handler
+app.use((req, res) => {
+    res.status(404).json({
+        error: {
+            code: 'NOT_FOUND',
+            message: `Route ${req.method} ${req.path} not found`,
+        }
+    });
+});
 // Start server
 app.listen(PORT, () => {
-    // Server started
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📡 Health check: http://localhost:${PORT}/health`);
+    console.log(`📚 API: http://localhost:${PORT}/api/v1`);
 });

@@ -1,20 +1,17 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.strictLimiter = exports.authenticatedLimiter = exports.unauthenticatedLimiter = exports.rateLimiter = void 0;
-const redis_1 = __importDefault(require("../config/redis"));
+const redis_1 = require("../config/redis");
 const rateLimiter = (config) => {
     return async (req, res, next) => {
         try {
             // Use user ID if authenticated, otherwise IP address
             const identifier = req.userId || req.ip || 'unknown';
             const key = `ratelimit:${identifier}:${req.path}`;
-            const current = await redis_1.default.incr(key);
+            const current = await redis_1.redis.incr(key);
             if (current === 1) {
                 // First request, set expiry
-                await redis_1.default.pexpire(key, config.windowMs);
+                await redis_1.redis.pexpire(key, config.windowMs);
             }
             if (current > config.maxRequests) {
                 return res.status(429).json({

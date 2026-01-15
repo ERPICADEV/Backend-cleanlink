@@ -2,7 +2,7 @@
 // src/middleware/adminRoles.ts
 // 🔐 Admin Role & Permission Middleware
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.noViewerAccess = exports.assignedReportsOnly = exports.canAccessReport = exports.requirePermission = exports.superAdminOnly = exports.adminMiddleware = void 0;
+exports.fieldAdminOnly = exports.noViewerAccess = exports.assignedReportsOnly = exports.canAccessReport = exports.requirePermission = exports.superAdminOnly = exports.adminMiddleware = void 0;
 const postgres_1 = require("../config/postgres");
 const permissions_1 = require("../lib/permissions");
 /**
@@ -162,3 +162,19 @@ const noViewerAccess = (req, res, next) => {
     next();
 };
 exports.noViewerAccess = noViewerAccess;
+/**
+ * Middleware: Only Field Admin (admin role) can pass
+ * Blocks SuperAdmin and Viewers
+ */
+const fieldAdminOnly = (req, res, next) => {
+    if (req.adminRole !== permissions_1.AdminRole.ADMIN) {
+        return res.status(403).json({
+            error: {
+                code: 'FORBIDDEN',
+                message: 'Only Field Admin can perform this action',
+            },
+        });
+    }
+    next();
+};
+exports.fieldAdminOnly = fieldAdminOnly;
