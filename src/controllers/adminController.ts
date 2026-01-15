@@ -302,10 +302,11 @@ export const resolveReport = async (req: Request, res: Response) => {
     const { id } = req.params
     const { cleaned_image_url, notes, status } = req.body
 
-    // 🔒 NEW: Only Field Admin (admin role) can resolve reports
-    if (req.adminRole !== 'admin') {
+    // 🔒 UPDATED: Field Admin (admin role) or SuperAdmin can resolve reports
+    // SuperAdmin can resolve directly, Field Admin resolves assigned reports
+    if (req.adminRole !== 'admin' && req.adminRole !== 'superadmin') {
       return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Only Field Admin can mark reports as resolved' },
+        error: { code: 'FORBIDDEN', message: 'Only Field Admin or SuperAdmin can mark reports as resolved' },
       })
     }
 
@@ -334,6 +335,24 @@ export const resolveReport = async (req: Request, res: Response) => {
       return res.status(404).json({
         error: { code: 'NOT_FOUND', message: 'Report not found' },
       })
+    }
+
+    // 🔒 NEW: Field Admin can only resolve assigned reports
+    // SuperAdmin can resolve any report
+    if (req.adminRole === 'admin') {
+      const assignedCheck = await pool.query(`
+        SELECT id FROM report_progress 
+        WHERE report_id = $1 AND admin_id = $2
+      `, [id, req.adminId])
+      
+      if (!assignedCheck.rows[0]) {
+        return res.status(403).json({
+          error: { 
+            code: 'FORBIDDEN', 
+            message: 'You can only resolve reports assigned to you' 
+          },
+        })
+      }
     }
 
     // 🔒 NEW: Check if report is pending approval (optional - for workflow)
@@ -381,8 +400,9 @@ export const resolveReport = async (req: Request, res: Response) => {
         id
       ])
 
-      // 2. Award civic points (only if non-anonymous reporter)
-      if (report.reporter_id) {
+      // 2. Award civic points (only if non-anonymous reporter AND status is 'resolved')
+      // Points are NOT awarded for 'invalid' or 'duplicate' statuses
+      if (report.reporter_id && finalStatus === 'resolved') {
         const basePoints = 30
 
         const aiScore = report.ai_score ? JSON.parse(report.ai_score) : {}
@@ -414,6 +434,9 @@ export const resolveReport = async (req: Request, res: Response) => {
           resolution: resolutionBonus,
           total: totalPoints,
         }
+
+        console.log(`💰 Awarding ${totalPoints} points to user ${report.reporter_id} for resolved report ${id}`)
+        console.log(`📊 Points breakdown:`, pointsBreakdown)
 
         await client.query('UPDATE users SET civic_points = civic_points + $1 WHERE id = $2', [totalPoints, report.reporter_id])
 
@@ -470,8 +493,16 @@ export const resolveReport = async (req: Request, res: Response) => {
             report_id: id,
             total_points: newTotalPoints,
             points_breakdown: pointsBreakdown,
+            resolved_by_role: req.adminRole,
+            resolved_by_user_id: req.userId,
           })
         ])
+        
+        console.log(`✅ Points successfully awarded and logged for report ${id}`)
+      } else if (report.reporter_id && finalStatus !== 'resolved') {
+        console.log(`⚠️ Skipping points award for report ${id} - status is '${finalStatus}', not 'resolved'`)
+      } else if (!report.reporter_id) {
+        console.log(`⚠️ Skipping points award for report ${id} - anonymous report (no reporter_id)`)
       }
 
       // 4. Audit log for resolution
@@ -1139,47 +1170,183 @@ export const approveReportWork = async (req: Request, res: Response) => {
       })
     }
 
-    // Update report - mark as resolved
-    await pool.query(`
-      UPDATE reports
-      SET 
-        status = 'resolved',
-        mcd_verified_by = $1,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-    `, [req.userId, reportId])
+    // Get reporter info for points calculation
+    const reporterResult = await pool.query(`
+      SELECT 
+        r.reporter_id,
+        u.civic_points, 
+        u.civic_level
+      FROM reports r
+      LEFT JOIN users u ON r.reporter_id = u.id
+      WHERE r.id = $1
+    `, [reportId])
+    const reporterInfo = reporterResult.rows[0] as any
 
-    // Update progress - mark as approved
-    await pool.query(`
-      UPDATE report_progress
-      SET 
-        approved_at = CURRENT_TIMESTAMP,
-        approved_by = $1,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE report_id = $2
-    `, [req.adminId, reportId])
+    // Get comments count for engagement score
+    const commentsResult = await pool.query('SELECT COUNT(*) as count FROM comments WHERE report_id = $1', [reportId])
+    const commentsCount = parseInt(commentsResult.rows[0].count)
 
-    // Create audit log
-    const auditLogId = randomUUID()
-    await pool.query(`
-      INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-    `, [
-      auditLogId,
-      req.userId!,
-      'WORK_APPROVED',
-      'REPORT',
-      reportId,
-      JSON.stringify({
-        approved_by: req.adminId,
-        previous_status: report.status,
-        new_status: 'resolved',
-      })
-    ])
+    let totalPoints = 0
+    let pointsBreakdown: any = {}
+
+    // Transaction for atomic operations
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+
+      // 1. Update report - mark as resolved
+      await client.query(`
+        UPDATE reports
+        SET 
+          status = 'resolved',
+          mcd_verified_by = $1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [req.userId, reportId])
+
+      // 2. Update progress - mark as approved
+      await client.query(`
+        UPDATE report_progress
+        SET 
+          approved_at = CURRENT_TIMESTAMP,
+          approved_by = $1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE report_id = $2
+      `, [req.adminId, reportId])
+
+      // 3. Award civic points (only if non-anonymous reporter)
+      // Points are always awarded when SuperAdmin approves (status becomes 'resolved')
+      if (reporterInfo.reporter_id) {
+        console.log(`💰 Awarding points for approved report ${reportId} to user ${reporterInfo.reporter_id}`)
+        const basePoints = 30
+
+        const aiScore = report.ai_score ? JSON.parse(report.ai_score) : {}
+        const aiConfidence = aiScore?.legit || 0.5
+        const aiBonus = Math.floor(aiConfidence * 20)
+
+        const severity = aiScore?.severity || 0.5
+        const severityBonus = Math.floor(severity * 15)
+
+        const engagementScore = Math.min(
+          (report.upvotes * 2) + commentsCount,
+          25
+        )
+
+        const resolutionBonus = 30
+
+        totalPoints =
+          basePoints +
+          aiBonus +
+          severityBonus +
+          engagementScore +
+          resolutionBonus
+
+        pointsBreakdown = {
+          base: basePoints,
+          ai_bonus: aiBonus,
+          severity_bonus: severityBonus,
+          engagement: engagementScore,
+          resolution: resolutionBonus,
+          total: totalPoints,
+        }
+
+        await client.query('UPDATE users SET civic_points = civic_points + $1 WHERE id = $2', [totalPoints, reporterInfo.reporter_id])
+
+        const newTotalPoints = (reporterInfo.civic_points || 0) + totalPoints
+        const previousLevel = reporterInfo.civic_level || 1
+        const newLevel = calculateLevel(newTotalPoints)
+
+        if (newLevel !== previousLevel) {
+          await client.query('UPDATE users SET civic_level = $1 WHERE id = $2', [newLevel, reporterInfo.reporter_id])
+
+          const levelAuditId = randomUUID()
+          await client.query(`
+            INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+          `, [
+            levelAuditId,
+            req.userId!,
+            'USER_LEVEL_UP',
+            'USER',
+            reporterInfo.reporter_id,
+            JSON.stringify({
+              old_level: previousLevel,
+              new_level: newLevel,
+              points: newTotalPoints,
+            })
+          ])
+
+          if (newLevel > previousLevel) {
+            const levelName = LEVEL_CONFIG[newLevel as keyof typeof LEVEL_CONFIG]?.name || 'New Level'
+            NotificationService.notifyLevelUp(reporterInfo.reporter_id, newLevel, levelName)
+          }
+        }
+
+        NotificationService.notifyReportResolved(
+          reporterInfo.reporter_id,
+          reportId,
+          totalPoints,
+          newLevel
+        )
+
+        const pointsAuditId = randomUUID()
+        await client.query(`
+          INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        `, [
+          pointsAuditId,
+          req.userId!,
+          'POINTS_AWARDED',
+          'USER',
+          reporterInfo.reporter_id,
+          JSON.stringify({
+            points_awarded: totalPoints,
+            reason: 'report_approved_by_superadmin',
+            report_id: reportId,
+            total_points: newTotalPoints,
+            points_breakdown: pointsBreakdown,
+            approved_by_role: req.adminRole,
+            approved_by_user_id: req.userId,
+          })
+        ])
+        
+        console.log(`✅ Points successfully awarded and logged for approved report ${reportId}`)
+      } else if (!reporterInfo.reporter_id) {
+        console.log(`⚠️ Skipping points award for approved report ${reportId} - anonymous report (no reporter_id)`)
+      }
+
+      // 4. Create audit log for approval
+      const auditLogId = randomUUID()
+      await client.query(`
+        INSERT INTO audit_logs (id, actor_id, action_type, target_type, target_id, details, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      `, [
+        auditLogId,
+        req.userId!,
+        'WORK_APPROVED',
+        'REPORT',
+        reportId,
+        JSON.stringify({
+          approved_by: req.adminId,
+          previous_status: report.status,
+          new_status: 'resolved',
+          points_awarded: reporterInfo.reporter_id ? totalPoints : 0,
+        })
+      ])
+      
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Report approved and marked as resolved',
+      points_awarded: reporterInfo.reporter_id ? totalPoints : 0,
+      points_breakdown: reporterInfo.reporter_id ? pointsBreakdown : null,
     })
   } catch (error) {
     console.error('Error approving report:', error)
@@ -1229,10 +1396,10 @@ export const rejectReportWork = async (req: Request, res: Response) => {
       })
     }
 
-    // Update report - back to assigned
+    // Update report - mark as rejected (sends back to field admin for correction)
     await pool.query(`
       UPDATE reports
-      SET status = 'assigned', updated_at = CURRENT_TIMESTAMP
+      SET status = 'rejected', updated_at = CURRENT_TIMESTAMP
       WHERE id = $1
     `, [reportId])
 
@@ -1262,7 +1429,7 @@ export const rejectReportWork = async (req: Request, res: Response) => {
         rejected_by: req.adminId,
         rejection_reason,
         previous_status: report.status,
-        new_status: 'assigned',
+        new_status: 'rejected',
       })
     ])
 

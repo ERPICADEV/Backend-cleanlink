@@ -54,7 +54,8 @@ router.patch('/reports/:id/submit-approval', submitForApproval);
 // Audit logs
 router.get('/audit/reports/:id', getReportAuditLogs);
 
-// Resolve endpoint (Field Admin only - blocks SuperAdmin)
-router.patch('/reports/:id/resolve', fieldAdminOnly, assignedReportsOnly, resolveReport);
+// Resolve endpoint (Field Admin or SuperAdmin can resolve)
+// Field Admin can only resolve assigned reports, SuperAdmin can resolve any report
+router.patch('/reports/:id/resolve', resolveReport);
 
 export default router;
