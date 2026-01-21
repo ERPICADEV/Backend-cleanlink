@@ -62,7 +62,7 @@ export const getMe = async (req: Request, res: Response) => {
     const userData = {
       ...user,
       region: parseRegion(user.region),
-      badges: user.badges ? JSON.parse(user.badges) : [],
+      badges: user.badges || [],
       civicPoints: user.civic_points,
       civicLevel: user.civic_level,
       avatarUrl: user.avatar_url,
@@ -223,7 +223,7 @@ export const getPublicProfile = async (req: Request, res: Response) => {
     const publicProfile = {
       id: user.id,
       username: user.username || 'Anonymous',
-      badges: user.badges ? JSON.parse(user.badges) : [],
+      badges: user.badges || [],
       civicPoints: user.civic_points,
       civicLevel: user.civic_level,
       region: parseRegion(user.region),
@@ -268,7 +268,7 @@ export const getMyComments = async (req: Request, res: Response) => {
       author: {
         id: comment.author_id,
         username: comment.username || 'Anonymous',
-        badges: comment.badges ? JSON.parse(comment.badges) : [],
+        badges: comment.badges || [],
       },
       parent_comment_id: comment.parent_comment_id,
       created_at: comment.created_at,

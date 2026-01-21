@@ -70,7 +70,7 @@ export const updateAIResult = async (req: Request, res: Response) => {
         SET ai_score = $1, status = $2, duplicate_of = $3, updated_at = CURRENT_TIMESTAMP 
         WHERE id = $4
       `, [
-        JSON.stringify(aiScoreData),
+        aiScoreData,
         newStatus,
         duplicate_of || null,
         id
@@ -87,13 +87,13 @@ export const updateAIResult = async (req: Request, res: Response) => {
         'AI_ANALYSIS_COMPLETE',
         'REPORT',
         id,
-        JSON.stringify({
+        {
           ai_score: ai_score.legit,
           severity: ai_score.severity,
           duplicate_of: duplicate_of,
           new_status: newStatus,
           insights: insights || [],
-        })
+        }
       ]);
       
       await client.query('COMMIT');
@@ -137,15 +137,8 @@ export const getPendingAIReports = async (req: Request, res: Response) => {
     const pendingReports = allPendingReports.filter((report: any) => {
       // No AI score at all
       if (!report.ai_score) return true;
-      
-      try {
-        // AI score exists but legit is null/undefined
-        const aiScore = JSON.parse(report.ai_score);
-        return aiScore.legit === null || aiScore.legit === undefined;
-      } catch {
-        // If JSON parsing fails, consider it unprocessed
-        return true;
-      }
+      // AI score exists but legit is null/undefined
+      return report.ai_score?.legit === null || report.ai_score?.legit === undefined;
     }).slice(0, parseInt(limit as string));
 
     // Parse JSON fields for response
@@ -153,11 +146,11 @@ export const getPendingAIReports = async (req: Request, res: Response) => {
       id: report.id,
       title: report.title,
       description: report.description,
-      images: report.images ? JSON.parse(report.images) : [],
-      location: report.location ? JSON.parse(report.location) : {},
+      images: report.images || [],
+      location: report.location || {},
       category: report.category,
       createdAt: report.created_at,
-      aiScore: report.ai_score ? JSON.parse(report.ai_score) : null,
+      aiScore: report.ai_score || null,
     }));
 
     return res.status(200).json({

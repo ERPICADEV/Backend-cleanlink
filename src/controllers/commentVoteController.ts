@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { pool } from '../config/postgres';
 import { randomUUID } from 'crypto';
 import { calculateVoteChange, isValidVoteValue, type VoteState } from '../utils/voteLogic';
+import { invalidatePattern } from '../utils/cache';
 
 interface CommentVoteRow {
   value: number;
@@ -106,6 +107,12 @@ export const voteComment = async (req: Request, res: Response) => {
       const finalDownvotes = parseInt(finalCounts.downvotes) || 0;
 
       const processingTime = Date.now() - startTime;
+
+      // Invalidate cached public reads (short TTL, fail-open)
+      // Voting affects comment counts/trees in report detail and potentially feeds.
+      invalidatePattern('cache:reports:*');
+      // We don't have reportId in this handler without extra queries; invalidate report detail broadly.
+      invalidatePattern('cache:report:*');
 
       // Return actual database counts, not calculated values
       // This ensures the client receives the authoritative state

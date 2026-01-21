@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { pool } from '../config/postgres';
 import { randomUUID } from 'crypto';
 import { NotificationService } from '../services/notificationService';
+import { invalidatePattern } from '../utils/cache';
 
 // POST /api/v1/reports/:id/comments
 export const createComment = async (req: Request, res: Response) => {
@@ -99,13 +100,17 @@ export const createComment = async (req: Request, res: Response) => {
       );
     }
 
+    // Invalidate cached public reads (short TTL, fail-open)
+    invalidatePattern('cache:reports:*');
+    invalidatePattern(`cache:report:${reportId}`);
+
     return res.status(201).json({
       id: comment.id,
       text: comment.text,
       author: {
         id: comment.author_id,
         username: comment.username || 'Anonymous',
-        badges: comment.badges ? JSON.parse(comment.badges) : [],
+        badges: comment.badges || [],
       },
       parent_comment_id: comment.parent_comment_id,
       upvotes: comment.upvotes || 0,
@@ -170,7 +175,7 @@ export const getComments = async (req: Request, res: Response) => {
         author: {
           id: comment.author_id,
           username: comment.username || 'Anonymous',
-          badges: comment.badges ? JSON.parse(comment.badges) : [],
+          badges: comment.badges || [],
         },
         parent_comment_id: comment.parent_comment_id,
         upvotes: parseInt(comment.upvotes) || 0,
@@ -264,13 +269,17 @@ export const updateComment = async (req: Request, res: Response) => {
       userVote = voteResult.rows[0]?.value || 0;
     }
 
+    // Invalidate cached public reads (short TTL, fail-open)
+    invalidatePattern('cache:reports:*');
+    invalidatePattern('cache:report:*');
+
     return res.status(200).json({
       id: updatedComment.id,
       text: updatedComment.text,
       author: {
         id: updatedComment.author_id,
         username: updatedComment.username || 'Anonymous',
-        badges: updatedComment.badges ? JSON.parse(updatedComment.badges) : [],
+        badges: updatedComment.badges || [],
       },
       parent_comment_id: updatedComment.parent_comment_id,
       upvotes: updatedComment.upvotes || 0,
@@ -292,6 +301,10 @@ export const deleteComment = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // Fetch report_id first so we can invalidate precisely after deletion
+    const reportLookup = await pool.query('SELECT report_id FROM comments WHERE id = $1', [id]);
+    const reportId = reportLookup.rows[0]?.report_id as string | undefined;
+
     const result = await pool.query('DELETE FROM comments WHERE id = $1', [id]);
 
     if (result.rowCount === 0) {
@@ -299,6 +312,11 @@ export const deleteComment = async (req: Request, res: Response) => {
         error: { code: 'NOT_FOUND', message: 'Comment not found' },
       });
     }
+
+    // Invalidate cached public reads (short TTL, fail-open)
+    invalidatePattern('cache:reports:*');
+    if (reportId) invalidatePattern(`cache:report:${reportId}`);
+    else invalidatePattern('cache:report:*');
 
     return res.status(200).json({
       message: 'Comment deleted successfully',

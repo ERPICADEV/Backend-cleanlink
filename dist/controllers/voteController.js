@@ -5,6 +5,7 @@ const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const notificationService_1 = require("../services/notificationService");
 const voteLogic_1 = require("../utils/voteLogic");
+const cache_1 = require("../utils/cache");
 /**
  * POST /api/v1/reports/:id/vote
  * Reddit-style voting: click same button = remove vote, click opposite = change vote
@@ -84,6 +85,9 @@ const voteReport = async (req, res) => {
             if (reportOwnerId && reportOwnerId !== userId && newUserVote !== 0) {
                 notificationService_1.NotificationService.notifyVote(reportOwnerId, id, newUserVote);
             }
+            // Invalidate cached public reads (short TTL, fail-open)
+            (0, cache_1.invalidatePattern)('cache:reports:*');
+            (0, cache_1.invalidatePattern)(`cache:report:${id}`);
             const processingTime = Date.now() - startTime;
             // Return actual database counts, not calculated values
             // This ensures the client receives the authoritative state

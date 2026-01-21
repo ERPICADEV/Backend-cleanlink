@@ -20,6 +20,7 @@ import rewardRoutes from './routes/rewardRoutes';
 import aiRoutes from './routes/aiRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import mapRoutes from './routes/mapRoutes';
+import path from 'path';
 
 // Check critical environment variables
 if (!process.env.DATABASE_URL) {
@@ -77,10 +78,42 @@ setTimeout(async () => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(helmet());
+// ================================
+// Performance logging (easy to remove)
+// Enable with: PERF_LOGGING=1
+// Logs: method + path + duration (ms)
+// ================================
+const PERF_LOGGING_ENABLED = process.env.PERF_LOGGING === '1';
+if (PERF_LOGGING_ENABLED) {
+  app.use((req, res, next) => {
+    const start = process.hrtime.bigint();
+    res.on('finish', () => {
+      const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
+      // Use a stable path without query string; method + path is what you asked for
+      const path = (req.originalUrl || req.url || '').split('?')[0] || req.path;
+      console.log(`[perf] api ${req.method} ${path} ${durationMs.toFixed(1)}ms`);
+    });
+    next();
+  });
+}
+
+// Helmet with relaxed cross-origin resource policy so frontend (8081) can load images from API (3000)
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Serve uploaded images (local storage)
+app.use(
+  '/uploads',
+  express.static(path.resolve(process.cwd(), 'uploads'), {
+    maxAge: '7d',
+    etag: true,
+    immutable: false,
+  })
+);
 
 // API Routes
 app.use('/api/v1/auth', authRoutes);

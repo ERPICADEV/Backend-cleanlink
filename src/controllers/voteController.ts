@@ -3,6 +3,7 @@ import { pool } from '../config/postgres';
 import { randomUUID } from 'crypto';
 import { NotificationService } from '../services/notificationService';
 import { calculateVoteChange, calculateCommunityScore, isValidVoteValue, type VoteState } from '../utils/voteLogic';
+import { invalidatePattern } from '../utils/cache';
 
 interface VoteRow {
   value: number;
@@ -114,6 +115,10 @@ export const voteReport = async (req: Request, res: Response) => {
       if (reportOwnerId && reportOwnerId !== userId && newUserVote !== 0) {
         NotificationService.notifyVote(reportOwnerId, id, newUserVote);
       }
+
+      // Invalidate cached public reads (short TTL, fail-open)
+      invalidatePattern('cache:reports:*');
+      invalidatePattern(`cache:report:${id}`);
 
       const processingTime = Date.now() - startTime;
 

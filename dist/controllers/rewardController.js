@@ -17,10 +17,9 @@ const getRewards = async (req, res) => {
       ORDER BY required_points ASC
     `, [now, now, now, now]);
         const rewards = rewardsResult.rows;
-        // Parse JSON fields
         const formattedRewards = rewards.map((reward) => ({
             ...reward,
-            metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+            metadata: reward.metadata || {},
             requiredPoints: reward.required_points,
             maxPerUser: reward.max_per_user,
             availableFrom: reward.available_from,
@@ -46,10 +45,9 @@ const getAllRewards = async (req, res) => {
       ORDER BY created_at DESC, required_points ASC
     `);
         const rewards = rewardsResult.rows;
-        // Parse JSON fields
         const formattedRewards = rewards.map((reward) => ({
             ...reward,
-            metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+            metadata: reward.metadata || {},
             requiredPoints: reward.required_points,
             maxPerUser: reward.max_per_user,
             availableFrom: reward.available_from,
@@ -151,7 +149,7 @@ const redeemReward = async (req, res) => {
                 req.userId,
                 id,
                 'requested',
-                JSON.stringify(requestData),
+                requestData,
                 createdAt,
                 createdAt
             ]);
@@ -174,7 +172,7 @@ const redeemReward = async (req, res) => {
                 'REWARD_REDEEMED',
                 'REDEMPTION',
                 redemptionId,
-                JSON.stringify(auditDetails),
+                auditDetails,
                 createdAt
             ]);
             await client.query('COMMIT');
@@ -246,7 +244,7 @@ const createReward = async (req, res) => {
             available_from ? new Date(available_from).toISOString() : null,
             available_until ? new Date(available_until).toISOString() : null,
             max_per_user,
-            JSON.stringify(metadata || {})
+            metadata || {}
         ]);
         // Create audit log
         const auditLogId = (0, crypto_1.randomUUID)();
@@ -259,18 +257,18 @@ const createReward = async (req, res) => {
             'REWARD_CREATED',
             'REWARD',
             rewardId,
-            JSON.stringify({
+            {
                 title: title,
                 required_points: required_points,
                 key: key,
-            })
+            }
         ]);
         // Get created reward
         const rewardResult = await postgres_1.pool.query('SELECT * FROM rewards WHERE id = $1', [rewardId]);
         const reward = rewardResult.rows[0];
         const formattedReward = {
             ...reward,
-            metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+            metadata: reward.metadata || {},
             requiredPoints: reward.required_points,
             maxPerUser: reward.max_per_user,
             availableFrom: reward.available_from,
@@ -316,7 +314,7 @@ const updateReward = async (req, res) => {
             }
             else if (key === 'metadata') {
                 updateFields.push(`${key} = $${paramIndex}`);
-                updateParams.push(JSON.stringify(updates[key]));
+                updateParams.push(updates[key]);
                 paramIndex++;
             }
             else {
@@ -344,14 +342,14 @@ const updateReward = async (req, res) => {
             'REWARD_UPDATED',
             'REWARD',
             id,
-            JSON.stringify({
+            {
                 previous: existingReward,
                 updates: updates,
-            })
+            }
         ]);
         const formattedReward = {
             ...reward,
-            metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+            metadata: reward.metadata || {},
             requiredPoints: reward.required_points,
             maxPerUser: reward.max_per_user,
             availableFrom: reward.available_from,
@@ -392,10 +390,10 @@ const deleteReward = async (req, res) => {
             'REWARD_DELETED',
             'REWARD',
             id,
-            JSON.stringify({
+            {
                 title: existingReward.title,
                 key: existingReward.key,
-            })
+            }
         ]);
         return res.status(200).json({
             message: 'Reward deleted successfully',

@@ -7,6 +7,8 @@ const queue_1 = require("../utils/queue");
 const dbErrorHandler_1 = require("../utils/dbErrorHandler");
 const databaseRetry_1 = require("../utils/databaseRetry");
 const preSubmissionService_1 = require("../services/preSubmissionService");
+const cache_1 = require("../utils/cache");
+const imageUploadService_1 = require("../services/imageUploadService");
 // GET /api/v1/reports (feed)
 const getReports = async (req, res) => {
     try {
@@ -16,17 +18,17 @@ const getReports = async (req, res) => {
         const params = [];
         let paramIndex = 1;
         if (typeof category === 'string' && category.trim()) {
-            whereClause += ` AND LOWER(category) = LOWER($${paramIndex})`;
+            whereClause += ` AND LOWER(r.category) = LOWER($${paramIndex})`;
             params.push(category.trim());
             paramIndex++;
         }
         if (typeof status === 'string' && status.trim()) {
-            whereClause += ` AND LOWER(status) = LOWER($${paramIndex})`;
+            whereClause += ` AND LOWER(r.status) = LOWER($${paramIndex})`;
             params.push(status.trim());
             paramIndex++;
         }
         if (typeof reporter_id === 'string' && reporter_id.trim()) {
-            whereClause += ` AND reporter_id = $${paramIndex}`;
+            whereClause += ` AND r.reporter_id = $${paramIndex}`;
             params.push(reporter_id.trim());
             paramIndex++;
         }
@@ -42,81 +44,109 @@ const getReports = async (req, res) => {
         }
         const sql = `
       SELECT 
-        id, title, description, category, images, location, visibility,
-        community_score, status, created_at, 
-        reporter_id, reporter_display, ai_score,
-        (SELECT COUNT(*) FROM comments WHERE report_id = reports.id) as comments_count,
-        (SELECT COUNT(*) FROM votes WHERE report_id = reports.id AND value = 1) as upvotes,
-        (SELECT COUNT(*) FROM votes WHERE report_id = reports.id AND value = -1) as downvotes
-      FROM reports 
+        r.id, r.title, r.description, r.category, r.images, r.location, r.visibility,
+        r.community_score, r.status, r.created_at, 
+        r.reporter_id, r.reporter_display, r.ai_score,
+        COALESCE(cc.comments_count, 0) as comments_count,
+        COALESCE(vv.upvotes, 0) as upvotes,
+        COALESCE(vv.downvotes, 0) as downvotes
+      FROM reports r
+      LEFT JOIN (
+        SELECT report_id, COUNT(*)::int as comments_count
+        FROM comments
+        GROUP BY report_id
+      ) cc ON cc.report_id = r.id
+      LEFT JOIN (
+        SELECT 
+          report_id,
+          COUNT(*) FILTER (WHERE value = 1)::int as upvotes,
+          COUNT(*) FILTER (WHERE value = -1)::int as downvotes
+        FROM votes
+        GROUP BY report_id
+      ) vv ON vv.report_id = r.id
       ${whereClause}
       ${orderBy}
       LIMIT $${paramIndex}
     `;
         params.push(parseInt(limit));
-        // Use retry logic for database queries to handle transient connection issues
-        const result = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(sql, params), 3, // max retries
-        1000 // initial delay in ms
-        );
-        const reports = result.rows;
-        // Get user votes for all reports if authenticated
-        let userVotes = {};
-        if (req.userId) {
-            const reportIds = reports.map((r) => r.id);
-            if (reportIds.length > 0) {
-                const placeholders = reportIds.map((_, i) => `$${i + 1}`).join(',');
-                const userVoteResult = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(`
-            SELECT report_id, value FROM votes 
-            WHERE report_id IN (${placeholders}) AND user_id = $${reportIds.length + 1}
-          `, [...reportIds, req.userId]), 3, 1000);
-                userVoteResult.rows.forEach((vote) => {
-                    userVotes[vote.report_id] = vote.value;
-                });
+        // Cache ONLY the public (unauthenticated) response to avoid caching user-specific user_vote.
+        // Short TTL by design.
+        const isPublicRequest = !req.userId;
+        const cacheKey = isPublicRequest
+            ? `cache:reports:${category || ''}:${status || ''}:${sort}:${limit}:${reporter_id || ''}`
+            : null;
+        const buildResponse = async () => {
+            const result = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(sql, params), 3, // max retries
+            1000 // initial delay in ms
+            );
+            const reports = result.rows;
+            // Get user votes for all reports if authenticated (NOT cached)
+            let userVotes = {};
+            if (req.userId) {
+                const reportIds = reports.map((r) => r.id);
+                if (reportIds.length > 0) {
+                    const placeholders = reportIds.map((_, i) => `$${i + 1}`).join(',');
+                    const userVoteResult = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(`
+              SELECT report_id, value FROM votes 
+              WHERE report_id IN (${placeholders}) AND user_id = $${reportIds.length + 1}
+            `, [...reportIds, req.userId]), 3, 1000);
+                    userVoteResult.rows.forEach((vote) => {
+                        userVotes[vote.report_id] = vote.value;
+                    });
+                }
             }
-        }
-        // Mask coordinates for public feed
-        const maskedReports = reports.map((report) => {
-            const reportData = { ...report };
-            // Parse JSON fields
-            if (reportData.images) {
-                reportData.images = JSON.parse(reportData.images);
-            }
-            if (reportData.location) {
-                reportData.location = JSON.parse(reportData.location);
+            // Mask coordinates for public feed
+            const maskedReports = await Promise.all(reports.map(async (report) => {
+                const reportData = { ...report };
+                // Normalize legacy images (stringified arrays / data URIs / legacy objects) to URL arrays
+                // IMPORTANT: do not coerce non-array objects to [] before normalization (would wipe legacy data).
+                const normalized = await (0, imageUploadService_1.normalizeImagesToUrls)(reportData.images);
+                reportData.images = normalized;
+                try {
+                    await postgres_1.pool.query('UPDATE reports SET images = $1 WHERE id = $2', [JSON.stringify(normalized), reportData.id]);
+                }
+                catch (err) {
+                    console.warn('⚠️ Failed to persist normalized images for report', reportData.id, err?.message);
+                }
+                // Normalize location: parse stringified JSON if needed
+                if (reportData.location && typeof reportData.location === 'string') {
+                    try {
+                        reportData.location = JSON.parse(reportData.location);
+                    }
+                    catch {
+                        // keep as-is if unparsable
+                    }
+                }
+                // Normalize images: if any are data URIs, upload and persist URL
                 // Mask coordinates if visibility is masked
-                if (reportData.visibility === 'masked' && reportData.location) {
+                if (reportData.location && reportData.visibility === 'masked') {
                     const { lat, lng, ...restLocation } = reportData.location;
                     reportData.location = restLocation;
                 }
-            }
-            // Parse ai_score and convert to camelCase
-            let aiScore = null;
-            try {
-                if (reportData.ai_score) {
-                    aiScore = JSON.parse(reportData.ai_score);
-                }
-            }
-            catch (e) {
-                console.error('Error parsing ai_score:', e);
-            }
-            const result = {
-                ...reportData,
-                aiScore, // Convert snake_case to camelCase for frontend
-                createdAt: reportData.created_at, // Convert snake_case to camelCase
-                description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
-                upvotes: parseInt(reportData.upvotes) || 0,
-                downvotes: parseInt(reportData.downvotes) || 0,
-                user_vote: userVotes[reportData.id] || 0
+                const aiScore = reportData.ai_score ?? null;
+                const result = {
+                    ...reportData,
+                    aiScore, // Convert snake_case to camelCase for frontend
+                    createdAt: reportData.created_at, // Convert snake_case to camelCase
+                    description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
+                    upvotes: parseInt(reportData.upvotes) || 0,
+                    downvotes: parseInt(reportData.downvotes) || 0,
+                    user_vote: userVotes[reportData.id] || 0
+                };
+                // Remove the snake_case versions from response
+                delete result.ai_score;
+                delete result.created_at;
+                return result;
+            }));
+            return {
+                data: maskedReports,
+                paging: null // Simplified - remove cursor for now
             };
-            // Remove the snake_case versions from response
-            delete result.ai_score;
-            delete result.created_at;
-            return result;
-        });
-        return res.status(200).json({
-            data: maskedReports,
-            paging: null // Simplified - remove cursor for now
-        });
+        };
+        const responseBody = cacheKey
+            ? await (0, cache_1.getCached)(cacheKey, buildResponse, 10)
+            : await buildResponse();
+        return res.status(200).json(responseBody);
     }
     catch (error) {
         const errorResponse = (0, dbErrorHandler_1.handleDatabaseError)(error, 'Failed to fetch reports');
@@ -145,6 +175,10 @@ const createReport = async (req, res) => {
         const reporterId = anonymous ? null : req.userId;
         const reporterDisplay = anonymous ? 'Anonymous' : req.userEmail || 'User';
         const reportId = (0, crypto_1.randomUUID)();
+        // NOTE: In some deployments `reports.images` / `reports.location` are TEXT (see `schema.sql`).
+        // Store JSON strings to avoid Postgres array-literal serialization like "{...}" which breaks parsing on read.
+        const normalizedImages = await (0, imageUploadService_1.normalizeImagesToUrls)(images || []);
+        const locationValue = location || {};
         await postgres_1.pool.query(`
       INSERT INTO reports (
         id, title, description, category, images, location, visibility,
@@ -155,9 +189,9 @@ const createReport = async (req, res) => {
             title.trim(),
             description.trim(),
             category,
-            JSON.stringify(images || []),
-            JSON.stringify(location || {}),
-            location?.visibility || 'public',
+            JSON.stringify(normalizedImages),
+            JSON.stringify(locationValue),
+            locationValue?.visibility || 'public',
             reporterId,
             reporterDisplay,
             0, // community_score
@@ -169,6 +203,9 @@ const createReport = async (req, res) => {
         catch (aiError) {
             console.error('❌ Failed to enqueue AI analysis:', aiError);
         }
+        // Invalidate cached public reads (short TTL, fail-open)
+        (0, cache_1.invalidatePattern)('cache:reports:*');
+        (0, cache_1.invalidatePattern)(`cache:report:${reportId}`);
         return res.status(201).json({
             id: reportId,
             status: 'pending',
@@ -189,167 +226,247 @@ exports.createReport = createReport;
 const getReport = async (req, res) => {
     try {
         const { id } = req.params;
+        // Cache ONLY the public (unauthenticated) response.
+        // This endpoint includes user-specific votes and admin-specific fields when authenticated.
+        const isPublicRequest = !req.userId;
+        const cacheKey = isPublicRequest ? `cache:report:${id}` : null;
         // Check if user is admin (simplified)
         let isAdmin = false;
         if (req.userId) {
             const adminResult = await postgres_1.pool.query('SELECT 1 FROM admins WHERE user_id = $1', [req.userId]);
             isAdmin = !!adminResult.rows[0];
         }
-        // Get report with dynamically calculated vote counts
-        const reportResult = await postgres_1.pool.query(`
-      SELECT 
-        r.*,
-        (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = 1) as upvotes,
-        (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = -1) as downvotes
-      FROM reports r
-      WHERE r.id = $1
-    `, [id]);
-        const report = reportResult.rows[0];
-        if (!report) {
+        const buildReportResponse = async () => {
+            // Get report with dynamically calculated vote counts
+            const reportResult = await postgres_1.pool.query(`
+        SELECT 
+          r.*,
+          (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = 1) as upvotes,
+          (SELECT COUNT(*) FROM votes WHERE report_id = r.id AND value = -1) as downvotes
+        FROM reports r
+        WHERE r.id = $1
+      `, [id]);
+            const report = reportResult.rows[0];
+            if (!report) {
+                return { __notFound: true };
+            }
+            // Get reporter info
+            let reporter = null;
+            if (report.reporter_id) {
+                const reporterResult = await postgres_1.pool.query(`
+          SELECT id, username, ${isAdmin ? 'email,' : ''} badges 
+          FROM users WHERE id = $1
+        `, [report.reporter_id]);
+                reporter = reporterResult.rows[0];
+            }
+            // Fetch the entire comment tree in ONE query (WITH RECURSIVE), including:
+            // - author info
+            // - upvotes / downvotes counts
+            // - current user's vote (if authenticated)
+            //
+            // Note: Node.js only builds the tree in memory to preserve the existing response shape.
+            const commentsResult = await postgres_1.pool.query(`
+        WITH RECURSIVE comment_tree AS (
+          -- Base: top-level comments for this report
+          SELECT
+            c.id,
+            c.report_id,
+            c.author_id,
+            c.text,
+            c.parent_comment_id,
+            c.created_at,
+            c.updated_at,
+            u.username,
+            u.badges,
+            COALESCE(cv_counts.upvotes, 0) AS upvotes,
+            COALESCE(cv_counts.downvotes, 0) AS downvotes,
+            COALESCE(uv.value, 0) AS user_vote,
+            0 AS depth,
+            (to_char(c.created_at, 'YYYYMMDDHH24MISS.MS') || '-' || c.id) AS path
+          FROM comments c
+          LEFT JOIN users u ON c.author_id = u.id
+          LEFT JOIN (
+            SELECT
+              comment_id,
+              COUNT(*) FILTER (WHERE value = 1)::int AS upvotes,
+              COUNT(*) FILTER (WHERE value = -1)::int AS downvotes
+            FROM comment_votes
+            GROUP BY comment_id
+          ) cv_counts ON cv_counts.comment_id = c.id
+          LEFT JOIN comment_votes uv
+            ON uv.comment_id = c.id
+           AND uv.user_id = $2
+          WHERE c.report_id = $1
+            AND c.parent_comment_id IS NULL
+
+          UNION ALL
+
+          -- Recursive: replies
+          SELECT
+            c.id,
+            c.report_id,
+            c.author_id,
+            c.text,
+            c.parent_comment_id,
+            c.created_at,
+            c.updated_at,
+            u.username,
+            u.badges,
+            COALESCE(cv_counts.upvotes, 0) AS upvotes,
+            COALESCE(cv_counts.downvotes, 0) AS downvotes,
+            COALESCE(uv.value, 0) AS user_vote,
+            ct.depth + 1 AS depth,
+            (ct.path || '/' || (to_char(c.created_at, 'YYYYMMDDHH24MISS.MS') || '-' || c.id)) AS path
+          FROM comments c
+          INNER JOIN comment_tree ct ON c.parent_comment_id = ct.id
+          LEFT JOIN users u ON c.author_id = u.id
+          LEFT JOIN (
+            SELECT
+              comment_id,
+              COUNT(*) FILTER (WHERE value = 1)::int AS upvotes,
+              COUNT(*) FILTER (WHERE value = -1)::int AS downvotes
+            FROM comment_votes
+            GROUP BY comment_id
+          ) cv_counts ON cv_counts.comment_id = c.id
+          LEFT JOIN comment_votes uv
+            ON uv.comment_id = c.id
+           AND uv.user_id = $2
+        )
+        SELECT
+          id,
+          author_id,
+          text,
+          parent_comment_id,
+          created_at,
+          updated_at,
+          username,
+          badges,
+          upvotes,
+          downvotes,
+          user_vote
+        FROM comment_tree
+        ORDER BY path ASC;
+        `, [id, req.userId || null]);
+            const flatComments = commentsResult.rows;
+            // Build the comment tree in memory while preserving existing JSON shape
+            const byId = new Map();
+            const roots = [];
+            for (const row of flatComments) {
+                const formatted = {
+                    id: row.id,
+                    text: row.text,
+                    author: {
+                        id: row.author_id,
+                        username: row.username || 'Anonymous',
+                        badges: row.badges || [],
+                    },
+                    parent_comment_id: row.parent_comment_id,
+                    upvotes: parseInt(row.upvotes) || 0,
+                    downvotes: parseInt(row.downvotes) || 0,
+                    user_vote: parseInt(row.user_vote) || 0,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                };
+                byId.set(formatted.id, formatted);
+                if (!formatted.parent_comment_id) {
+                    roots.push(formatted);
+                }
+                else {
+                    const parent = byId.get(formatted.parent_comment_id);
+                    if (parent) {
+                        if (!parent.replies)
+                            parent.replies = [];
+                        parent.replies.push(formatted);
+                    }
+                    else {
+                        // In case ordering ever changes unexpectedly, keep it safe:
+                        // treat as root rather than dropping the comment.
+                        roots.push(formatted);
+                    }
+                }
+            }
+            const comments = roots;
+            // Get votes count
+            const votesResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM votes WHERE report_id = $1', [id]);
+            const votesCount = votesResult.rows[0];
+            // Get user's vote if authenticated
+            let userVote = 0;
+            if (req.userId) {
+                const userVoteResult = await postgres_1.pool.query('SELECT value FROM votes WHERE report_id = $1 AND user_id = $2', [id, req.userId]);
+                userVote = userVoteResult.rows[0]?.value || 0;
+            }
+            const aiScore = report.ai_score ?? null;
+            // Normalize legacy images (data URIs / stringified arrays / legacy objects) to URLs; persist best-effort
+            const normalizedImages = await (0, imageUploadService_1.normalizeImagesToUrls)(report.images);
+            report.images = normalizedImages;
+            try {
+                await postgres_1.pool.query('UPDATE reports SET images = $1 WHERE id = $2', [JSON.stringify(normalizedImages), report.id]);
+            }
+            catch (err) {
+                console.warn('⚠️ Failed to persist normalized images for report', report.id, err?.message);
+            }
+            // Normalize location: parse stringified JSON if needed
+            if (report.location && typeof report.location === 'string') {
+                try {
+                    report.location = JSON.parse(report.location);
+                }
+                catch {
+                    // keep as-is if unparsable
+                }
+            }
+            const responseReport = {
+                ...report,
+                images: report.images || [],
+                location: report.location || {},
+                aiScore, // Convert snake_case to camelCase for frontend
+                createdAt: report.created_at, // Convert snake_case to camelCase
+                updatedAt: report.updated_at, // Convert snake_case to camelCase
+                upvotes: parseInt(report.upvotes) || 0,
+                downvotes: parseInt(report.downvotes) || 0,
+                reporter,
+                comments,
+                user_vote: userVote,
+                _count: {
+                    votes: votesCount.count
+                }
+            };
+            // Remove the snake_case versions from response
+            delete responseReport.ai_score;
+            delete responseReport.created_at;
+            delete responseReport.updated_at;
+            // If the report has been worked on by admins, expose the latest
+            // resolution photos/details so they can be shown in the public feed.
+            const resolutionResult = await postgres_1.pool.query(`
+        SELECT photos, completion_details, submitted_at
+        FROM report_progress
+        WHERE report_id = $1
+        ORDER BY submitted_at DESC
+        LIMIT 1
+      `, [id]);
+            const latestProgress = resolutionResult.rows[0];
+            if (latestProgress) {
+                const resolutionPhotos = latestProgress.photos || [];
+                responseReport.resolutionPhotos = resolutionPhotos;
+                responseReport.resolutionDetails = latestProgress.completion_details || null;
+            }
+            // Mask coordinates for non-admin users
+            if (!isAdmin && report.visibility === 'masked' && responseReport.location) {
+                const { lat, lng, ...restLocation } = responseReport.location;
+                responseReport.location = restLocation;
+            }
+            // Hide reporter email for non-admin
+            if (!isAdmin && responseReport.reporter) {
+                delete responseReport.reporter.email;
+            }
+            return responseReport;
+        };
+        const built = cacheKey ? await (0, cache_1.getCached)(cacheKey, buildReportResponse, 15) : await buildReportResponse();
+        if (built?.__notFound) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Report not found' },
             });
         }
-        // Get reporter info
-        let reporter = null;
-        if (report.reporter_id) {
-            const reporterResult = await postgres_1.pool.query(`
-        SELECT id, username, ${isAdmin ? 'email,' : ''} badges 
-        FROM users WHERE id = $1
-      `, [report.reporter_id]);
-            reporter = reporterResult.rows[0];
-        }
-        // Get comments with authors and dynamically calculated vote counts
-        const commentsResult = await postgres_1.pool.query(`
-      SELECT 
-        c.*, 
-        u.username, 
-        u.badges,
-        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
-        (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
-      FROM comments c 
-      LEFT JOIN users u ON c.author_id = u.id 
-      WHERE c.report_id = $1 
-      ORDER BY c.created_at ASC
-    `, [id]);
-        const rawComments = commentsResult.rows;
-        // Format comments to match getComments endpoint structure
-        const formatComment = async (comment) => {
-            // Get user's vote for this comment if authenticated
-            let userVote = 0;
-            if (req.userId) {
-                const voteResult = await postgres_1.pool.query('SELECT value FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [comment.id, req.userId]);
-                userVote = voteResult.rows[0]?.value || 0;
-            }
-            const formatted = {
-                id: comment.id,
-                text: comment.text,
-                author: {
-                    id: comment.author_id,
-                    username: comment.username || 'Anonymous',
-                    badges: comment.badges ? JSON.parse(comment.badges) : [],
-                },
-                parent_comment_id: comment.parent_comment_id,
-                upvotes: parseInt(comment.upvotes) || 0,
-                downvotes: parseInt(comment.downvotes) || 0,
-                user_vote: userVote,
-                created_at: comment.created_at,
-                updated_at: comment.updated_at,
-            };
-            // Get replies recursively with dynamically calculated vote counts
-            const repliesResult = await postgres_1.pool.query(`
-        SELECT 
-          c.*, 
-          u.username, 
-          u.badges,
-          (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = 1) as upvotes,
-          (SELECT COUNT(*) FROM comment_votes WHERE comment_id = c.id AND value = -1) as downvotes
-        FROM comments c 
-        LEFT JOIN users u ON c.author_id = u.id 
-        WHERE c.parent_comment_id = $1
-        ORDER BY c.created_at ASC
-      `, [comment.id]);
-            const replies = repliesResult.rows;
-            if (replies.length > 0) {
-                formatted.replies = await Promise.all(replies.map((reply) => formatComment(reply)));
-            }
-            return formatted;
-        };
-        // Get top-level comments (no parent) and format them
-        const topLevelComments = rawComments.filter((c) => !c.parent_comment_id);
-        const comments = await Promise.all(topLevelComments.map((comment) => formatComment(comment)));
-        // Get votes count
-        const votesResult = await postgres_1.pool.query('SELECT COUNT(*) as count FROM votes WHERE report_id = $1', [id]);
-        const votesCount = votesResult.rows[0];
-        // Get user's vote if authenticated
-        let userVote = 0;
-        if (req.userId) {
-            const userVoteResult = await postgres_1.pool.query('SELECT value FROM votes WHERE report_id = $1 AND user_id = $2', [id, req.userId]);
-            userVote = userVoteResult.rows[0]?.value || 0;
-        }
-        // Parse JSON fields
-        let aiScore = null;
-        try {
-            if (report.ai_score) {
-                aiScore = JSON.parse(report.ai_score);
-            }
-        }
-        catch (e) {
-            console.error('Error parsing ai_score:', e);
-        }
-        const responseReport = {
-            ...report,
-            images: report.images ? JSON.parse(report.images) : [],
-            location: report.location ? JSON.parse(report.location) : {},
-            aiScore, // Convert snake_case to camelCase for frontend
-            createdAt: report.created_at, // Convert snake_case to camelCase
-            updatedAt: report.updated_at, // Convert snake_case to camelCase
-            upvotes: parseInt(report.upvotes) || 0,
-            downvotes: parseInt(report.downvotes) || 0,
-            reporter,
-            comments,
-            user_vote: userVote,
-            _count: {
-                votes: votesCount.count
-            }
-        };
-        // Remove the snake_case versions from response
-        delete responseReport.ai_score;
-        delete responseReport.created_at;
-        delete responseReport.updated_at;
-        // If the report has been worked on by admins, expose the latest
-        // resolution photos/details so they can be shown in the public feed.
-        const resolutionResult = await postgres_1.pool.query(`
-      SELECT photos, completion_details, submitted_at
-      FROM report_progress
-      WHERE report_id = $1
-      ORDER BY submitted_at DESC
-      LIMIT 1
-    `, [id]);
-        const latestProgress = resolutionResult.rows[0];
-        if (latestProgress) {
-            let resolutionPhotos = [];
-            try {
-                if (latestProgress.photos) {
-                    resolutionPhotos = JSON.parse(latestProgress.photos);
-                }
-            }
-            catch (e) {
-                console.error('Error parsing resolution photos:', e);
-            }
-            responseReport.resolutionPhotos = resolutionPhotos;
-            responseReport.resolutionDetails = latestProgress.completion_details || null;
-        }
-        // Mask coordinates for non-admin users
-        if (!isAdmin && report.visibility === 'masked' && responseReport.location) {
-            const { lat, lng, ...restLocation } = responseReport.location;
-            responseReport.location = restLocation;
-        }
-        // Hide reporter email for non-admin
-        if (!isAdmin && responseReport.reporter) {
-            delete responseReport.reporter.email;
-        }
-        return res.status(200).json(responseReport);
+        return res.status(200).json(built);
     }
     catch (error) {
         console.error('Get report error:', error);
@@ -398,7 +515,7 @@ const updateReport = async (req, res) => {
         Object.keys(updates).forEach(key => {
             if (key === 'images' || key === 'location') {
                 updateFields.push(`${key} = $${paramIndex}`);
-                updateParams.push(JSON.stringify(updates[key]));
+                updateParams.push(updates[key]);
             }
             else {
                 updateFields.push(`${key} = $${paramIndex}`);
@@ -410,15 +527,22 @@ const updateReport = async (req, res) => {
         const updateSql = `UPDATE reports SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
         updateParams.push(id);
         await postgres_1.pool.query(updateSql, updateParams);
+        // Invalidate cached public reads (short TTL, fail-open)
+        (0, cache_1.invalidatePattern)('cache:reports:*');
+        (0, cache_1.invalidatePattern)(`cache:report:${id}`);
         // Get updated report
         const updatedReportResult = await postgres_1.pool.query('SELECT * FROM reports WHERE id = $1', [id]);
         const updatedReport = updatedReportResult.rows[0];
-        // Parse JSON fields
-        if (updatedReport.images) {
-            updatedReport.images = JSON.parse(updatedReport.images);
-        }
-        if (updatedReport.location) {
-            updatedReport.location = JSON.parse(updatedReport.location);
+        // Normalize images on update
+        if (Array.isArray(updatedReport.images)) {
+            const normalized = await (0, imageUploadService_1.normalizeImagesToUrls)(updatedReport.images);
+            updatedReport.images = normalized;
+            try {
+                await postgres_1.pool.query('UPDATE reports SET images = $1 WHERE id = $2', [normalized, id]);
+            }
+            catch (err) {
+                console.warn('⚠️ Failed to persist normalized images for report', id, err?.message);
+            }
         }
         return res.status(200).json(updatedReport);
     }

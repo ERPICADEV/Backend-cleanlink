@@ -31,6 +31,7 @@ router.patch('/reports/:id/submit-approval', adminController_1.submitForApproval
 // ==================== BOTH ROLES CAN ACCESS ====================
 // Audit logs
 router.get('/audit/reports/:id', adminController_1.getReportAuditLogs);
-// Resolve endpoint (Field Admin only - blocks SuperAdmin)
-router.patch('/reports/:id/resolve', adminMiddleware_1.fieldAdminOnly, adminMiddleware_1.assignedReportsOnly, adminController_1.resolveReport);
+// Resolve endpoint (Field Admin or SuperAdmin can resolve)
+// Field Admin can only resolve assigned reports, SuperAdmin can resolve any report
+router.patch('/reports/:id/resolve', adminController_1.resolveReport);
 exports.default = router;

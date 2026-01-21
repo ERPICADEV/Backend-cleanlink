@@ -5,6 +5,13 @@ exports.warmUpPool = warmUpPool;
 const pg_1 = require("pg");
 // Get DATABASE_URL from environment
 const databaseUrl = process.env.DATABASE_URL;
+// ================================
+// Performance logging (easy to remove)
+// Enable with: PERF_LOGGING=1
+// Logs: PostgreSQL queries slower than 100ms (query text only, no params)
+// ================================
+const PERF_LOGGING_ENABLED = process.env.PERF_LOGGING === '1';
+const SLOW_QUERY_THRESHOLD_MS = 100;
 if (!databaseUrl) {
     console.warn('⚠️  WARNING: DATABASE_URL is not set. Database connections will fail.');
     console.warn('   Make sure DATABASE_URL is in your .env file and dotenv.config() is called before importing this module.');
@@ -30,6 +37,46 @@ exports.pool = new pg_1.Pool({
     keepAlive: true,
     keepAliveInitialDelayMillis: 10000, // Start keepalive after 10 seconds
 });
+// Wrap pool.query (and pool.connect().client.query) to log slow queries.
+// This does NOT change query behavior/results; it only measures duration.
+if (PERF_LOGGING_ENABLED) {
+    const originalPoolQuery = exports.pool.query.bind(exports.pool);
+    const logIfSlow = (durationMs, text) => {
+        if (durationMs <= SLOW_QUERY_THRESHOLD_MS)
+            return;
+        const sql = (text || '').replace(/\s+/g, ' ').trim();
+        const truncated = sql.length > 500 ? `${sql.slice(0, 500)}…` : sql;
+        console.warn(`[perf] pg slow_query ${durationMs.toFixed(1)}ms ${truncated}`);
+    };
+    exports.pool.query = async (...args) => {
+        const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+        const start = process.hrtime.bigint();
+        try {
+            return await originalPoolQuery(...args);
+        }
+        finally {
+            const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
+            logIfSlow(durationMs, queryText);
+        }
+    };
+    const originalConnect = exports.pool.connect.bind(exports.pool);
+    exports.pool.connect = async (...args) => {
+        const client = await originalConnect(...args);
+        const originalClientQuery = client.query.bind(client);
+        client.query = async (...qArgs) => {
+            const queryText = typeof qArgs[0] === 'string' ? qArgs[0] : qArgs[0]?.text;
+            const start = process.hrtime.bigint();
+            try {
+                return await originalClientQuery(...qArgs);
+            }
+            finally {
+                const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
+                logIfSlow(durationMs, queryText);
+            }
+        };
+        return client;
+    };
+}
 // Add connection validation to catch stale connections
 exports.pool.on('error', (err) => {
     console.error('❌ PostgreSQL pool error:', {

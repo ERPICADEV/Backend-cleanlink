@@ -4,6 +4,7 @@ exports.deleteComment = exports.updateComment = exports.getComments = exports.cr
 const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const notificationService_1 = require("../services/notificationService");
+const cache_1 = require("../utils/cache");
 // POST /api/v1/reports/:id/comments
 const createComment = async (req, res) => {
     try {
@@ -82,13 +83,16 @@ const createComment = async (req, res) => {
                 : comment.text;
             notificationService_1.NotificationService.notifyNewComment(report.reporter_id, reportId, comment.username, snippet);
         }
+        // Invalidate cached public reads (short TTL, fail-open)
+        (0, cache_1.invalidatePattern)('cache:reports:*');
+        (0, cache_1.invalidatePattern)(`cache:report:${reportId}`);
         return res.status(201).json({
             id: comment.id,
             text: comment.text,
             author: {
                 id: comment.author_id,
                 username: comment.username || 'Anonymous',
-                badges: comment.badges ? JSON.parse(comment.badges) : [],
+                badges: comment.badges || [],
             },
             parent_comment_id: comment.parent_comment_id,
             upvotes: comment.upvotes || 0,
@@ -149,7 +153,7 @@ const getComments = async (req, res) => {
                 author: {
                     id: comment.author_id,
                     username: comment.username || 'Anonymous',
-                    badges: comment.badges ? JSON.parse(comment.badges) : [],
+                    badges: comment.badges || [],
                 },
                 parent_comment_id: comment.parent_comment_id,
                 upvotes: parseInt(comment.upvotes) || 0,
@@ -233,13 +237,16 @@ const updateComment = async (req, res) => {
             const voteResult = await postgres_1.pool.query('SELECT value FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [id, req.userId]);
             userVote = voteResult.rows[0]?.value || 0;
         }
+        // Invalidate cached public reads (short TTL, fail-open)
+        (0, cache_1.invalidatePattern)('cache:reports:*');
+        (0, cache_1.invalidatePattern)('cache:report:*');
         return res.status(200).json({
             id: updatedComment.id,
             text: updatedComment.text,
             author: {
                 id: updatedComment.author_id,
                 username: updatedComment.username || 'Anonymous',
-                badges: updatedComment.badges ? JSON.parse(updatedComment.badges) : [],
+                badges: updatedComment.badges || [],
             },
             parent_comment_id: updatedComment.parent_comment_id,
             upvotes: updatedComment.upvotes || 0,
@@ -261,12 +268,21 @@ exports.updateComment = updateComment;
 const deleteComment = async (req, res) => {
     try {
         const { id } = req.params;
+        // Fetch report_id first so we can invalidate precisely after deletion
+        const reportLookup = await postgres_1.pool.query('SELECT report_id FROM comments WHERE id = $1', [id]);
+        const reportId = reportLookup.rows[0]?.report_id;
         const result = await postgres_1.pool.query('DELETE FROM comments WHERE id = $1', [id]);
         if (result.rowCount === 0) {
             return res.status(404).json({
                 error: { code: 'NOT_FOUND', message: 'Comment not found' },
             });
         }
+        // Invalidate cached public reads (short TTL, fail-open)
+        (0, cache_1.invalidatePattern)('cache:reports:*');
+        if (reportId)
+            (0, cache_1.invalidatePattern)(`cache:report:${reportId}`);
+        else
+            (0, cache_1.invalidatePattern)('cache:report:*');
         return res.status(200).json({
             message: 'Comment deleted successfully',
         });

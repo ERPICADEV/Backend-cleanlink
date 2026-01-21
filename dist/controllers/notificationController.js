@@ -48,7 +48,7 @@ const getNotifications = async (req, res) => {
             type: notification.type,
             title: notification.title,
             message: notification.message,
-            data: notification.data ? JSON.parse(notification.data) : null,
+            data: notification.data || null,
             isRead: notification.is_read,
             createdAt: notification.created_at
         }));

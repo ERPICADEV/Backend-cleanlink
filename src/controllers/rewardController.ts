@@ -19,10 +19,9 @@ export const getRewards = async (req: Request, res: Response) => {
     
     const rewards = rewardsResult.rows;
 
-    // Parse JSON fields
     const formattedRewards = rewards.map((reward: any) => ({
       ...reward,
-      metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+      metadata: reward.metadata || {},
       requiredPoints: reward.required_points,
       maxPerUser: reward.max_per_user,
       availableFrom: reward.available_from,
@@ -50,10 +49,9 @@ export const getAllRewards = async (req: Request, res: Response) => {
     
     const rewards = rewardsResult.rows;
 
-    // Parse JSON fields
     const formattedRewards = rewards.map((reward: any) => ({
       ...reward,
-      metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+      metadata: reward.metadata || {},
       requiredPoints: reward.required_points,
       maxPerUser: reward.max_per_user,
       availableFrom: reward.available_from,
@@ -168,7 +166,7 @@ export const redeemReward = async (req: Request, res: Response) => {
           req.userId!,
           id,
           'requested',
-          JSON.stringify(requestData),
+          requestData,
           createdAt,
           createdAt
         ]);
@@ -193,7 +191,7 @@ export const redeemReward = async (req: Request, res: Response) => {
           'REWARD_REDEEMED',
           'REDEMPTION',
           redemptionId,
-          JSON.stringify(auditDetails),
+          auditDetails,
           createdAt
         ]);
         
@@ -283,7 +281,7 @@ export const createReward = async (req: Request, res: Response) => {
       available_from ? new Date(available_from).toISOString() : null,
       available_until ? new Date(available_until).toISOString() : null,
       max_per_user,
-      JSON.stringify(metadata || {})
+      metadata || {}
     ]);
 
     // Create audit log
@@ -297,11 +295,11 @@ export const createReward = async (req: Request, res: Response) => {
       'REWARD_CREATED',
       'REWARD',
       rewardId,
-      JSON.stringify({
+      {
         title: title,
         required_points: required_points,
         key: key,
-      })
+      }
     ]);
 
     // Get created reward
@@ -310,7 +308,7 @@ export const createReward = async (req: Request, res: Response) => {
 
     const formattedReward = {
       ...reward,
-      metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+      metadata: reward.metadata || {},
       requiredPoints: reward.required_points,
       maxPerUser: reward.max_per_user,
       availableFrom: reward.available_from,
@@ -358,7 +356,7 @@ export const updateReward = async (req: Request, res: Response) => {
         paramIndex++;
       } else if (key === 'metadata') {
         updateFields.push(`${key} = $${paramIndex}`);
-        updateParams.push(JSON.stringify(updates[key]));
+        updateParams.push(updates[key]);
         paramIndex++;
       } else {
         updateFields.push(`${key} = $${paramIndex}`);
@@ -389,15 +387,15 @@ export const updateReward = async (req: Request, res: Response) => {
       'REWARD_UPDATED',
       'REWARD',
       id,
-      JSON.stringify({
+      {
         previous: existingReward,
         updates: updates,
-      })
+      }
     ]);
 
     const formattedReward = {
       ...reward,
-      metadata: reward.metadata ? JSON.parse(reward.metadata) : {},
+      metadata: reward.metadata || {},
       requiredPoints: reward.required_points,
       maxPerUser: reward.max_per_user,
       availableFrom: reward.available_from,
@@ -442,10 +440,10 @@ export const deleteReward = async (req: Request, res: Response) => {
       'REWARD_DELETED',
       'REWARD',
       id,
-      JSON.stringify({
+      {
         title: existingReward.title,
         key: existingReward.key,
-      })
+      }
     ]);
 
     return res.status(200).json({

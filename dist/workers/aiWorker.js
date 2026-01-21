@@ -92,20 +92,8 @@ const processReportWithAI = async (reportId) => {
             return;
         }
         // Prepare data for AI analysis
-        let images = [];
-        try {
-            images = Array.isArray(report.images) ? report.images : JSON.parse(report.images || '[]');
-        }
-        catch {
-            images = [];
-        }
-        let location = {};
-        try {
-            location = typeof report.location === 'string' ? JSON.parse(report.location) : report.location;
-        }
-        catch {
-            location = {};
-        }
+        const images = Array.isArray(report.images) ? report.images : (report.images || []);
+        const location = report.location || {};
         const reportData = {
             title: report.title,
             description: report.description,
@@ -157,7 +145,7 @@ const processReportWithAI = async (reportId) => {
           updated_at = $3
         WHERE id = $4
       `, [
-                JSON.stringify(aiScoreData),
+                aiScoreData,
                 newStatus,
                 new Date().toISOString(),
                 reportId

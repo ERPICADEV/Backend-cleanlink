@@ -13,7 +13,7 @@ class NotificationService {
                 type,
                 title,
                 message,
-                JSON.stringify(data || {}),
+                data || {},
                 new Date().toISOString(),
                 false // PostgreSQL boolean
             ]);

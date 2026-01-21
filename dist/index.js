@@ -57,6 +57,7 @@ const rewardRoutes_1 = __importDefault(require("./routes/rewardRoutes"));
 const aiRoutes_1 = __importDefault(require("./routes/aiRoutes"));
 const notificationRoutes_1 = __importDefault(require("./routes/notificationRoutes"));
 const mapRoutes_1 = __importDefault(require("./routes/mapRoutes"));
+const path_1 = __importDefault(require("path"));
 // Check critical environment variables
 if (!process.env.DATABASE_URL) {
     console.warn('⚠️  WARNING: DATABASE_URL is not set in environment variables');
@@ -105,10 +106,30 @@ setTimeout(async () => {
 }, 1000);
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
+// ================================
+// Performance logging (easy to remove)
+// Enable with: PERF_LOGGING=1
+// Logs: method + path + duration (ms)
+// ================================
+const PERF_LOGGING_ENABLED = process.env.PERF_LOGGING === '1';
+if (PERF_LOGGING_ENABLED) {
+    app.use((req, res, next) => {
+        const start = process.hrtime.bigint();
+        res.on('finish', () => {
+            const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
+            // Use a stable path without query string; method + path is what you asked for
+            const path = (req.originalUrl || req.url || '').split('?')[0] || req.path;
+            console.log(`[perf] api ${req.method} ${path} ${durationMs.toFixed(1)}ms`);
+        });
+        next();
+    });
+}
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
+// Serve uploaded images (local storage)
+app.use('/uploads', express_1.default.static(path_1.default.resolve(process.cwd(), 'uploads')));
 // API Routes
 app.use('/api/v1/auth', authRoutes_1.default);
 app.use('/api/v1/users', userRoutes_1.default);

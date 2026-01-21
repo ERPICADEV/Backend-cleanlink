@@ -89,14 +89,7 @@ export const getAdminReports = async (req: Request, res: Response) => {
     const reports = result.rows as any[]
 
     const formattedReports = reports.map(report => {
-      let aiScore = null
-      try {
-        if (report.ai_score) {
-          aiScore = JSON.parse(report.ai_score)
-        }
-      } catch (e) {
-        console.error('Error parsing ai_score:', e)
-      }
+      const aiScore = report.ai_score || null
 
       // Calculate priority_score: (legit * 0.4) + (severity * 0.6)
       let priorityScore = 0.5 // Default if no AI score
@@ -250,13 +243,13 @@ export const assignReport = async (req: Request, res: Response) => {
       'REPORT_ASSIGNED',
       'REPORT',
       id,
-      JSON.stringify({
+        {
         assigned_to,
         notes: notes || '',
         previous_status: report.status,
         new_status: 'assigned',
         assigned_by: req.userId,
-      })
+        }
     ])
 
     // Send notification to the assigned field admin
@@ -396,7 +389,7 @@ export const resolveReport = async (req: Request, res: Response) => {
       `, [
         finalStatus,
         req.userId,
-        JSON.stringify(mcdResolution),
+        mcdResolution,
         id
       ])
 
@@ -405,7 +398,7 @@ export const resolveReport = async (req: Request, res: Response) => {
       if (report.reporter_id && finalStatus === 'resolved') {
         const basePoints = 30
 
-        const aiScore = report.ai_score ? JSON.parse(report.ai_score) : {}
+        const aiScore = report.ai_score || {}
         const aiConfidence = aiScore?.legit || 0.5
         const aiBonus = Math.floor(aiConfidence * 20)
 
@@ -457,11 +450,11 @@ export const resolveReport = async (req: Request, res: Response) => {
             'USER_LEVEL_UP',
             'USER',
             report.reporter_id,
-            JSON.stringify({
+            {
               old_level: previousLevel,
               new_level: newLevel,
               points: newTotalPoints,
-            })
+            }
           ])
 
           if (newLevel > previousLevel) {
@@ -487,7 +480,7 @@ export const resolveReport = async (req: Request, res: Response) => {
           'POINTS_AWARDED',
           'USER',
           report.reporter_id,
-          JSON.stringify({
+          {
             points_awarded: totalPoints,
             reason: 'report_resolved',
             report_id: id,
@@ -495,7 +488,7 @@ export const resolveReport = async (req: Request, res: Response) => {
             points_breakdown: pointsBreakdown,
             resolved_by_role: req.adminRole,
             resolved_by_user_id: req.userId,
-          })
+          }
         ])
         
         console.log(`✅ Points successfully awarded and logged for report ${id}`)
@@ -516,14 +509,14 @@ export const resolveReport = async (req: Request, res: Response) => {
         'REPORT_RESOLVED',
         'REPORT',
         id,
-        JSON.stringify({
+        {
           cleaned_image_url,
           notes: notes || '',
           previous_status: report.status,
           new_status: finalStatus,
           resolved_by: req.userId,
           points_awarded: report.reporter_id && finalStatus === 'resolved' ? totalPoints : 0,
-        })
+        }
       ])
       
       await client.query('COMMIT')
@@ -583,7 +576,7 @@ export const getReportAuditLogs = async (req: Request, res: Response) => {
       action_type: log.action_type,
       target_type: log.target_type,
       target_id: log.target_id,
-      details: log.details ? JSON.parse(log.details) : {},
+      details: log.details || {},
       created_at: log.created_at,
       actor: log.actor_id ? {
         id: log.actor_id,
@@ -808,22 +801,9 @@ export const getAssignedReports = async (req: Request, res: Response) => {
 
     const formattedReports = reports.map(report => {
       let aiScore = null
-      try {
-        if (report.ai_score) {
-          aiScore = JSON.parse(report.ai_score)
-        }
-      } catch (e) {
-        console.error('Error parsing ai_score:', e)
-      }
+      aiScore = report.ai_score || null
 
-      let progressPhotos = []
-      try {
-        if (report.progress_photos) {
-          progressPhotos = JSON.parse(report.progress_photos)
-        }
-      } catch (e) {
-        console.error('Error parsing progress_photos:', e)
-      }
+      const progressPhotos = report.progress_photos || []
 
       return {
         id: report.id,
@@ -831,8 +811,8 @@ export const getAssignedReports = async (req: Request, res: Response) => {
         description: report.description,
         category: report.category,
         status: report.status,
-        images: report.images ? JSON.parse(report.images) : [],
-        location: report.location ? JSON.parse(report.location) : {},
+        images: report.images || [],
+        location: report.location || {},
         created_at: report.created_at,
         aiScore,
         reporter: report.reporter_id ? {
@@ -916,7 +896,7 @@ export const updateReportProgress = async (req: Request, res: Response) => {
     }
     if (photos) {
       updates.push(`photos = $${paramIndex}`)
-      params.push(JSON.stringify(photos))
+      params.push(photos)
       paramIndex++
     }
     if (completion_details !== undefined) {
@@ -1001,7 +981,7 @@ export const submitForApproval = async (req: Request, res: Response) => {
       WHERE report_id = $3 AND admin_id = $4
     `, [
       completion_details,
-      photos ? JSON.stringify(photos) : '[]',
+      photos || [],
       reportId,
       req.adminId
     ])
@@ -1024,11 +1004,11 @@ export const submitForApproval = async (req: Request, res: Response) => {
       'WORK_SUBMITTED',
       'REPORT',
       reportId,
-      JSON.stringify({
+        {
         admin_id: req.adminId,
         completion_details,
         photos: photos || [],
-      })
+        }
     ])
 
     return res.status(200).json({
@@ -1085,23 +1065,9 @@ export const getPendingApprovals = async (req: Request, res: Response) => {
     const approvals = result.rows as any[]
 
     const formattedApprovals = approvals.map(item => {
-      let aiScore = null
-      try {
-        if (item.ai_score) {
-          aiScore = JSON.parse(item.ai_score)
-        }
-      } catch (e) {
-        console.error('Error parsing ai_score:', e)
-      }
+      const aiScore = item.ai_score || null
 
-      let photos = []
-      try {
-        if (item.photos) {
-          photos = JSON.parse(item.photos)
-        }
-      } catch (e) {
-        console.error('Error parsing photos:', e)
-      }
+      const photos = item.photos || []
 
       return {
         id: item.id,
@@ -1109,8 +1075,8 @@ export const getPendingApprovals = async (req: Request, res: Response) => {
         description: item.description,
         category: item.category,
         status: item.status,
-        images: item.images ? JSON.parse(item.images) : [],
-        location: item.location ? JSON.parse(item.location) : {},
+        images: item.images || [],
+        location: item.location || {},
         created_at: item.created_at,
         aiScore,
         progress: {
@@ -1220,7 +1186,7 @@ export const approveReportWork = async (req: Request, res: Response) => {
         console.log(`💰 Awarding points for approved report ${reportId} to user ${reporterInfo.reporter_id}`)
         const basePoints = 30
 
-        const aiScore = report.ai_score ? JSON.parse(report.ai_score) : {}
+        const aiScore = report.ai_score || {}
         const aiConfidence = aiScore?.legit || 0.5
         const aiBonus = Math.floor(aiConfidence * 20)
 
@@ -1269,11 +1235,11 @@ export const approveReportWork = async (req: Request, res: Response) => {
             'USER_LEVEL_UP',
             'USER',
             reporterInfo.reporter_id,
-            JSON.stringify({
+            {
               old_level: previousLevel,
               new_level: newLevel,
               points: newTotalPoints,
-            })
+            }
           ])
 
           if (newLevel > previousLevel) {
@@ -1299,7 +1265,7 @@ export const approveReportWork = async (req: Request, res: Response) => {
           'POINTS_AWARDED',
           'USER',
           reporterInfo.reporter_id,
-          JSON.stringify({
+          {
             points_awarded: totalPoints,
             reason: 'report_approved_by_superadmin',
             report_id: reportId,
@@ -1307,7 +1273,7 @@ export const approveReportWork = async (req: Request, res: Response) => {
             points_breakdown: pointsBreakdown,
             approved_by_role: req.adminRole,
             approved_by_user_id: req.userId,
-          })
+          }
         ])
         
         console.log(`✅ Points successfully awarded and logged for approved report ${reportId}`)
@@ -1326,12 +1292,12 @@ export const approveReportWork = async (req: Request, res: Response) => {
         'WORK_APPROVED',
         'REPORT',
         reportId,
-        JSON.stringify({
+        {
           approved_by: req.adminId,
           previous_status: report.status,
           new_status: 'resolved',
           points_awarded: reporterInfo.reporter_id ? totalPoints : 0,
-        })
+        }
       ])
       
       await client.query('COMMIT')
@@ -1425,12 +1391,12 @@ export const rejectReportWork = async (req: Request, res: Response) => {
       'WORK_REJECTED',
       'REPORT',
       reportId,
-      JSON.stringify({
+      {
         rejected_by: req.adminId,
         rejection_reason,
         previous_status: report.status,
         new_status: 'rejected',
-      })
+      }
     ])
 
     return res.status(200).json({

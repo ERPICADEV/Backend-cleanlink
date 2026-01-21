@@ -167,7 +167,7 @@ const signup = async (req, res) => {
             phone || null,
             passwordHash || null,
             regionToStore,
-            password ? JSON.stringify([{ provider: 'email', provider_id: email }]) : JSON.stringify([]),
+            password ? [{ provider: 'email', provider_id: email }] : [],
             avatar_url || null,
             bio || null,
             0, // civic_points
@@ -344,7 +344,7 @@ const googleAuth = async (req, res) => {
             if (usernameCheck.rows.length > 0) {
                 finalUsername = `${finalUsername}_${Math.random().toString(36).slice(2, 6)}`.slice(0, 30);
             }
-            const authProviders = JSON.stringify([{ provider: 'google', provider_id: googleSub }]);
+            const authProviders = [{ provider: 'google', provider_id: googleSub }];
             await postgres_1.pool.query(`
         INSERT INTO users (
           id, username, email, phone, password_hash, region, auth_providers,
@@ -371,12 +371,12 @@ const googleAuth = async (req, res) => {
         else {
             // Ensure google provider is recorded (best-effort)
             try {
-                const parsed = user.auth_providers ? JSON.parse(user.auth_providers) : [];
+                const parsed = user.auth_providers || [];
                 const hasGoogle = Array.isArray(parsed) && parsed.some((p) => p?.provider === 'google' && p?.provider_id === googleSub);
                 if (!hasGoogle) {
                     const next = Array.isArray(parsed) ? [...parsed, { provider: 'google', provider_id: googleSub }] : [{ provider: 'google', provider_id: googleSub }];
                     await postgres_1.pool.query('UPDATE users SET auth_providers = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [
-                        JSON.stringify(next),
+                        next,
                         user.id,
                     ]);
                 }

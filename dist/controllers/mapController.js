@@ -31,7 +31,8 @@ const getMapReports = async (req, res) => {
         const sql = `
       SELECT 
         id, title, category, status, location, images, 
-        upvotes, downvotes, created_at, ai_score, reporter_display
+        upvotes, downvotes, created_at, ai_score, reporter_display,
+        COALESCE(jsonb_array_length(images), 0) as image_count
       FROM reports 
       ${whereClause}
       ORDER BY created_at DESC
@@ -45,8 +46,8 @@ const getMapReports = async (req, res) => {
         const reports = result.rows;
         // Format for map consumption
         const mapData = reports.map(report => {
-            const location = report.location ? JSON.parse(report.location) : {};
-            const aiScore = report.ai_score ? JSON.parse(report.ai_score) : {};
+            const location = report.location || {};
+            const aiScore = report.ai_score || {};
             return {
                 id: report.id,
                 type: 'report',
@@ -65,7 +66,7 @@ const getMapReports = async (req, res) => {
                     reporter: report.reporter_display,
                     ai_confidence: aiScore?.legit || 0.5,
                     severity: aiScore?.severity || 0.5,
-                    image_count: report.images ? JSON.parse(report.images).length : 0,
+                    image_count: parseInt(report.image_count) || 0,
                     // Status-based styling
                     color: getStatusColor(report.status),
                     icon: getCategoryIcon(report.category)
@@ -113,7 +114,7 @@ const getMapClusters = async (req, res) => {
         const precision = Math.pow(10, Math.floor(clusterZoom / 3));
         const clusters = {};
         reports.forEach(report => {
-            const location = report.location ? JSON.parse(report.location) : {};
+            const location = report.location || {};
             if (!location?.lat || !location?.lng)
                 return;
             // Simple grid-based clustering
@@ -178,7 +179,7 @@ const getMapStats = async (req, res) => {
         // Manual aggregation for location stats
         const areaMap = {};
         reports.forEach(report => {
-            const location = report.location ? JSON.parse(report.location) : {};
+            const location = report.location || {};
             if (!location?.lat || !location?.lng)
                 return;
             const key = `${location.lat}_${location.lng}`;

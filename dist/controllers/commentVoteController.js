@@ -4,6 +4,7 @@ exports.getCommentVote = exports.voteComment = void 0;
 const postgres_1 = require("../config/postgres");
 const crypto_1 = require("crypto");
 const voteLogic_1 = require("../utils/voteLogic");
+const cache_1 = require("../utils/cache");
 /**
  * POST /api/v1/reports/comments/:id/vote
  * Reddit-style voting: click same button = remove vote, click opposite = change vote
@@ -76,6 +77,11 @@ const voteComment = async (req, res) => {
             const finalUpvotes = parseInt(finalCounts.upvotes) || 0;
             const finalDownvotes = parseInt(finalCounts.downvotes) || 0;
             const processingTime = Date.now() - startTime;
+            // Invalidate cached public reads (short TTL, fail-open)
+            // Voting affects comment counts/trees in report detail and potentially feeds.
+            (0, cache_1.invalidatePattern)('cache:reports:*');
+            // We don't have reportId in this handler without extra queries; invalidate report detail broadly.
+            (0, cache_1.invalidatePattern)('cache:report:*');
             // Return actual database counts, not calculated values
             // This ensures the client receives the authoritative state
             res.json({
