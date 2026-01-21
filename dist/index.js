@@ -124,12 +124,19 @@ if (PERF_LOGGING_ENABLED) {
         next();
     });
 }
-app.use((0, helmet_1.default)());
+// Helmet with relaxed cross-origin resource policy so frontend (8081) can load images from API (3000)
+app.use((0, helmet_1.default)({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 // Serve uploaded images (local storage)
-app.use('/uploads', express_1.default.static(path_1.default.resolve(process.cwd(), 'uploads')));
+app.use('/uploads', express_1.default.static(path_1.default.resolve(process.cwd(), 'uploads'), {
+    maxAge: '7d',
+    etag: true,
+    immutable: false,
+}));
 // API Routes
 app.use('/api/v1/auth', authRoutes_1.default);
 app.use('/api/v1/users', userRoutes_1.default);

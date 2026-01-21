@@ -17,6 +17,26 @@ const parseRegion = (regionStr) => {
         return regionStr;
     }
 };
+// Helper to safely parse JSON arrays stored as TEXT (e.g. '[]')
+const parseJsonArray = (value) => {
+    if (!value)
+        return [];
+    if (Array.isArray(value))
+        return value;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed)
+            return [];
+        try {
+            const parsed = JSON.parse(trimmed);
+            return Array.isArray(parsed) ? parsed : [];
+        }
+        catch {
+            return [];
+        }
+    }
+    return [];
+};
 // GET /api/v1/users/me
 const getMe = async (req, res) => {
     try {
@@ -61,7 +81,7 @@ const getMe = async (req, res) => {
         const userData = {
             ...user,
             region: parseRegion(user.region),
-            badges: user.badges || [],
+            badges: parseJsonArray(user.badges),
             civicPoints: user.civic_points,
             civicLevel: user.civic_level,
             avatarUrl: user.avatar_url,
@@ -208,7 +228,7 @@ const getPublicProfile = async (req, res) => {
         const publicProfile = {
             id: user.id,
             username: user.username || 'Anonymous',
-            badges: user.badges || [],
+            badges: parseJsonArray(user.badges),
             civicPoints: user.civic_points,
             civicLevel: user.civic_level,
             region: parseRegion(user.region),
@@ -251,7 +271,7 @@ const getMyComments = async (req, res) => {
             author: {
                 id: comment.author_id,
                 username: comment.username || 'Anonymous',
-                badges: comment.badges || [],
+                badges: parseJsonArray(comment.badges),
             },
             parent_comment_id: comment.parent_comment_id,
             created_at: comment.created_at,

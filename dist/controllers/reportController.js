@@ -124,9 +124,19 @@ const getReports = async (req, res) => {
                     reportData.location = restLocation;
                 }
                 const aiScore = reportData.ai_score ?? null;
+                // Parse ai_score if stored as TEXT
+                let parsedAiScore = aiScore;
+                if (typeof parsedAiScore === 'string') {
+                    try {
+                        parsedAiScore = JSON.parse(parsedAiScore);
+                    }
+                    catch {
+                        // keep raw
+                    }
+                }
                 const result = {
                     ...reportData,
-                    aiScore, // Convert snake_case to camelCase for frontend
+                    aiScore: parsedAiScore, // Convert snake_case to camelCase for frontend
                     createdAt: reportData.created_at, // Convert snake_case to camelCase
                     description_preview: reportData.description.substring(0, 100) + (reportData.description.length > 100 ? '...' : ''),
                     upvotes: parseInt(reportData.upvotes) || 0,
@@ -396,6 +406,15 @@ const getReport = async (req, res) => {
                 userVote = userVoteResult.rows[0]?.value || 0;
             }
             const aiScore = report.ai_score ?? null;
+            let parsedAiScore = aiScore;
+            if (typeof parsedAiScore === 'string') {
+                try {
+                    parsedAiScore = JSON.parse(parsedAiScore);
+                }
+                catch {
+                    // keep raw
+                }
+            }
             // Normalize legacy images (data URIs / stringified arrays / legacy objects) to URLs; persist best-effort
             const normalizedImages = await (0, imageUploadService_1.normalizeImagesToUrls)(report.images);
             report.images = normalizedImages;
@@ -418,7 +437,7 @@ const getReport = async (req, res) => {
                 ...report,
                 images: report.images || [],
                 location: report.location || {},
-                aiScore, // Convert snake_case to camelCase for frontend
+                aiScore: parsedAiScore, // Convert snake_case to camelCase for frontend
                 createdAt: report.created_at, // Convert snake_case to camelCase
                 updatedAt: report.updated_at, // Convert snake_case to camelCase
                 upvotes: parseInt(report.upvotes) || 0,
