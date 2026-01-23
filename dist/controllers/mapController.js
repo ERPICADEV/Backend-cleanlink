@@ -32,7 +32,7 @@ const getMapReports = async (req, res) => {
       SELECT 
         id, title, category, status, location, images, 
         upvotes, downvotes, created_at, ai_score, reporter_display,
-        COALESCE(jsonb_array_length(images), 0) as image_count
+        COALESCE(json_array_length(NULLIF(images, '')::json), 0) as image_count
       FROM reports 
       ${whereClause}
       ORDER BY created_at DESC
@@ -48,8 +48,14 @@ const getMapReports = async (req, res) => {
         const reports = result.rows;
         // Format for map consumption
         const mapData = reports.map(report => {
-            const location = report.location || {};
-            const aiScore = report.ai_score || {};
+            // In this codebase schema.sql stores these JSON blobs as TEXT (e.g. '{}' / '[]').
+            // In some deployments they may be JSON/JSONB already. Normalize here.
+            const location = typeof report.location === 'string'
+                ? safeJsonParse(report.location, {})
+                : (report.location || {});
+            const aiScore = typeof report.ai_score === 'string'
+                ? safeJsonParse(report.ai_score, {})
+                : (report.ai_score || {});
             return {
                 id: report.id,
                 type: 'report',
@@ -227,6 +233,14 @@ const getMapStats = async (req, res) => {
     }
 };
 exports.getMapStats = getMapStats;
+function safeJsonParse(value, fallback) {
+    try {
+        return JSON.parse(value);
+    }
+    catch {
+        return fallback;
+    }
+}
 // Helper functions for map styling
 function getStatusColor(status) {
     const colors = {
