@@ -58,6 +58,15 @@ export function isDatabaseConnectionError(error: any): boolean {
     'connection closed',
     'unable to connect',
     'failed to connect',
+    'query timeout',
+    'canceling statement',
+    'server closed',
+    'connection ended',
+    'ssl',
+    'certificate',
+    'handshake',
+    'econnreset',
+    'econnaborted',
   ];
   
   // Check error code
@@ -104,6 +113,19 @@ export function isTableMissingError(error: any): boolean {
 }
 
 export function handleDatabaseError(error: any, defaultMessage: string = 'Database operation failed') {
+  // Always log the full error for debugging in production
+  console.error('❌ Database error occurred:', {
+    code: error.code,
+    message: error.message,
+    name: error.name,
+    errno: error.errno,
+    syscall: error.syscall,
+    address: error.address,
+    port: error.port,
+    // Include stack trace for better debugging
+    stack: error.stack ? error.stack.split('\n').slice(0, 10).join('\n') : undefined
+  });
+
   if (isDatabaseConnectionError(error)) {
     // Always log detailed error information for debugging (even in production for connection errors)
     console.error('❌ Database connection error details:', {
@@ -143,7 +165,27 @@ export function handleDatabaseError(error: any, defaultMessage: string = 'Databa
     };
   }
   
-  // Other database errors
+  // Check if it's a query timeout or cancellation (common on Render)
+  const errorMessage = String(error.message || '').toLowerCase();
+  if (errorMessage.includes('timeout') || errorMessage.includes('canceling') || error.code === '57014') {
+    return {
+      status: 503, // Service Unavailable
+      error: {
+        code: 'DATABASE_TIMEOUT',
+        message: 'Database query timed out. The database may be sleeping or under heavy load.',
+        details: process.env.NODE_ENV === 'development' 
+          ? `Timeout error: ${error.message}` 
+          : undefined
+      }
+    };
+  }
+  
+  // Other database errors - but log them as connection errors if they seem related
+  // This helps catch edge cases where errors aren't properly identified
+  if (errorMessage.includes('query') && (errorMessage.includes('failed') || errorMessage.includes('error'))) {
+    console.warn('⚠️  Potential connection-related error not caught by isDatabaseConnectionError:', error.message);
+  }
+  
   return {
     status: 500,
     error: {

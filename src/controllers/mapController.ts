@@ -51,10 +51,12 @@ export const getMapReports = async (req: Request, res: Response) => {
     params.push(parseInt(limit as string));
 
     // Use retry logic for database queries to handle transient connection issues
+    // Increased retries and delays for Render (database may be sleeping)
+    const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
     const result = await withRetry(
       () => pool.query(sql, params),
-      3, // max retries
-      1000 // initial delay in ms
+      isRender ? 5 : 3, // More retries for Render
+      isRender ? 2000 : 1000 // Longer initial delay for Render (database wake-up time)
     );
     const reports = result.rows as any[];
 
@@ -118,11 +120,17 @@ export const getMapClusters = async (req: Request, res: Response) => {
     const { zoom, bounds } = req.query;
 
     // Simple clustering - get reports
-    const reportsResult = await pool.query(`
-      SELECT id, location, category, status 
-      FROM reports 
-      LIMIT 500
-    `);
+    // Use retry logic for database queries to handle transient connection issues
+    const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
+    const reportsResult = await withRetry(
+      () => pool.query(`
+        SELECT id, location, category, status 
+        FROM reports 
+        LIMIT 500
+      `),
+      isRender ? 5 : 3,
+      isRender ? 2000 : 1000
+    );
     const reports = reportsResult.rows as any[];
 
     // Simple clustering by rounding coordinates
@@ -186,16 +194,27 @@ export const getMapClusters = async (req: Request, res: Response) => {
 // GET /api/v1/map/stats
 export const getMapStats = async (req: Request, res: Response) => {
   try {
+    // Use retry logic for database queries to handle transient connection issues
+    const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
+    
     // Get category and status stats
-    const categoryStatsResult = await pool.query(`
-      SELECT category, status, COUNT(*) as count 
-      FROM reports 
-      GROUP BY category, status
-    `);
+    const categoryStatsResult = await withRetry(
+      () => pool.query(`
+        SELECT category, status, COUNT(*) as count 
+        FROM reports 
+        GROUP BY category, status
+      `),
+      isRender ? 5 : 3,
+      isRender ? 2000 : 1000
+    );
     const categoryStats = categoryStatsResult.rows as any[];
 
     // Fetch reports for location stats
-    const reportsResult = await pool.query('SELECT location FROM reports');
+    const reportsResult = await withRetry(
+      () => pool.query('SELECT location FROM reports'),
+      isRender ? 5 : 3,
+      isRender ? 2000 : 1000
+    );
     const reports = reportsResult.rows as any[];
 
     // Manual aggregation for location stats
