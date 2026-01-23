@@ -40,8 +40,10 @@ const getMapReports = async (req, res) => {
     `;
         params.push(parseInt(limit));
         // Use retry logic for database queries to handle transient connection issues
-        const result = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(sql, params), 3, // max retries
-        1000 // initial delay in ms
+        // Increased retries and delays for Render (database may be sleeping)
+        const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
+        const result = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(sql, params), isRender ? 5 : 3, // More retries for Render
+        isRender ? 2000 : 1000 // Longer initial delay for Render (database wake-up time)
         );
         const reports = result.rows;
         // Format for map consumption
@@ -103,11 +105,13 @@ const getMapClusters = async (req, res) => {
     try {
         const { zoom, bounds } = req.query;
         // Simple clustering - get reports
-        const reportsResult = await postgres_1.pool.query(`
-      SELECT id, location, category, status 
-      FROM reports 
-      LIMIT 500
-    `);
+        // Use retry logic for database queries to handle transient connection issues
+        const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
+        const reportsResult = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(`
+        SELECT id, location, category, status 
+        FROM reports 
+        LIMIT 500
+      `), isRender ? 5 : 3, isRender ? 2000 : 1000);
         const reports = reportsResult.rows;
         // Simple clustering by rounding coordinates
         const clusterZoom = parseInt(zoom) || 10;
@@ -166,15 +170,17 @@ exports.getMapClusters = getMapClusters;
 // GET /api/v1/map/stats
 const getMapStats = async (req, res) => {
     try {
+        // Use retry logic for database queries to handle transient connection issues
+        const isRender = process.env.RENDER || process.env.DATABASE_URL?.includes('render.com') || process.env.DATABASE_URL?.includes('onrender.com');
         // Get category and status stats
-        const categoryStatsResult = await postgres_1.pool.query(`
-      SELECT category, status, COUNT(*) as count 
-      FROM reports 
-      GROUP BY category, status
-    `);
+        const categoryStatsResult = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query(`
+        SELECT category, status, COUNT(*) as count 
+        FROM reports 
+        GROUP BY category, status
+      `), isRender ? 5 : 3, isRender ? 2000 : 1000);
         const categoryStats = categoryStatsResult.rows;
         // Fetch reports for location stats
-        const reportsResult = await postgres_1.pool.query('SELECT location FROM reports');
+        const reportsResult = await (0, databaseRetry_1.withRetry)(() => postgres_1.pool.query('SELECT location FROM reports'), isRender ? 5 : 3, isRender ? 2000 : 1000);
         const reports = reportsResult.rows;
         // Manual aggregation for location stats
         const areaMap = {};

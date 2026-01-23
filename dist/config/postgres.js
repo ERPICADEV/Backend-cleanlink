@@ -28,14 +28,14 @@ exports.pool = new pg_1.Pool({
         rejectUnauthorized: false,
     } : false,
     // Connection pool settings optimized for Render
-    max: 10, // Maximum number of clients in the pool
-    min: isRender ? 1 : 2, // Lower min for Render to avoid connection issues on sleep
+    max: isRender ? 15 : 10, // More connections for Render to handle concurrent requests
+    min: isRender ? 2 : 2, // Keep some warm connections even on Render
     // Increased timeout for Render databases that may sleep
-    connectionTimeoutMillis: isRender ? 20000 : 5000, // 20s for Render (more time for wake-up), 5s for local
-    idleTimeoutMillis: isRender ? 60000 : 30000, // 60s for Render, 30s for local
+    connectionTimeoutMillis: isRender ? 30000 : 5000, // 30s for Render (more time for wake-up), 5s for local
+    idleTimeoutMillis: isRender ? 90000 : 30000, // 90s for Render (longer idle timeout), 30s for local
     // Keep connections alive to prevent Render from closing idle connections
     keepAlive: true,
-    keepAliveInitialDelayMillis: 10000, // Start keepalive after 10 seconds
+    keepAliveInitialDelayMillis: isRender ? 5000 : 10000, // Start keepalive sooner on Render
 });
 // Wrap pool.query (and pool.connect().client.query) to log slow queries.
 // This does NOT change query behavior/results; it only measures duration.
