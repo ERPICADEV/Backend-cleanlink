@@ -27,6 +27,20 @@ if (!process.env.DATABASE_URL) {
   console.warn('⚠️  WARNING: DATABASE_URL is not set in environment variables');
 }
 
+// Check AI service configuration
+const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
+if (!openRouterKey) {
+  console.warn('⚠️  WARNING: OPENROUTER_API_KEY is not set in environment variables');
+  console.warn('   AI features will not work. Add OPENROUTER_API_KEY=your_key_here to your .env file');
+} else {
+  console.log('✅ OPENROUTER_API_KEY found (first 15 chars):', openRouterKey.substring(0, 15) + '...');
+  if (!openRouterKey.startsWith('sk-or-v1-')) {
+    console.warn('⚠️  WARNING: OPENROUTER_API_KEY format may be incorrect');
+    console.warn('   Expected format: sk-or-v1-...');
+    console.warn('   Your key starts with:', openRouterKey.substring(0, 10) + '...');
+  }
+}
+
 // Import after dotenv.config() to ensure env vars are loaded
 import './utils/queue';
 import { pool, warmUpPool } from './config/postgres';

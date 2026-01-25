@@ -217,7 +217,9 @@ export const createReport = async (req: Request, res: Response) => {
       images,
       location,
       anonymous = false,
-      client_idempotency_key
+      client_idempotency_key,
+      ai_analysis, // Optional: AI analysis from pre-analysis
+      suggested_status // Optional: suggested status from pre-analysis
     } = req.body;
 
     const reporterId = anonymous ? null : req.userId;
@@ -229,11 +231,44 @@ export const createReport = async (req: Request, res: Response) => {
     const normalizedImages = await normalizeImagesToUrls(images || []);
     const locationValue = location || {};
 
+    // Determine initial status based on AI analysis if provided
+    let initialStatus = 'pending';
+    if (ai_analysis && typeof ai_analysis.legit === 'number') {
+      // Use the same logic as AI worker: legit < 0.3 = flagged, >= 0.7 = community_verified
+      const legit = ai_analysis.legit;
+      if (legit < 0.3) {
+        initialStatus = 'flagged';
+        console.log(`🚩 Setting report status to 'flagged' immediately (legit: ${legit})`);
+      } else if (legit >= 0.7) {
+        initialStatus = 'community_verified';
+        console.log(`✅ Setting report status to 'community_verified' immediately (legit: ${legit})`);
+      }
+    } else if (suggested_status) {
+      // Use suggested status if provided
+      initialStatus = suggested_status;
+      console.log(`📊 Using suggested status: ${suggested_status}`);
+    }
+
+    // Prepare AI score data if provided
+    let aiScoreData = null;
+    if (ai_analysis) {
+      aiScoreData = {
+        legit: ai_analysis.legit,
+        severity: ai_analysis.severity || 0.5,
+        duplicate_prob: ai_analysis.duplicate_prob || 0,
+        confidence_label: ai_analysis.confidence_label || 'medium',
+        explanation: ai_analysis.explanation,
+        vision_insights: ai_analysis.vision_insights || null,
+        insights: ai_analysis.insights || [],
+        processed_at: new Date().toISOString(),
+      };
+    }
+
     await pool.query(`
       INSERT INTO reports (
         id, title, description, category, images, location, visibility,
-        reporter_id, reporter_display, community_score, status, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+        reporter_id, reporter_display, community_score, status, ai_score, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
     `, [
       reportId,
       title.trim(),
@@ -245,13 +280,20 @@ export const createReport = async (req: Request, res: Response) => {
       reporterId,
       reporterDisplay,
       0, // community_score
-      'pending' // status
+      initialStatus, // Use determined status
+      aiScoreData ? JSON.stringify(aiScoreData) : null // Store AI analysis if provided
     ]);
 
-    try {
-      await enqueueAIAnalysis(reportId);
-    } catch (aiError) {
-      console.error('❌ Failed to enqueue AI analysis:', aiError);
+    // Only queue AI analysis if we don't already have it
+    if (!aiScoreData) {
+      try {
+        await enqueueAIAnalysis(reportId);
+        console.log('📥 Queued AI analysis for report:', reportId);
+      } catch (aiError) {
+        console.error('❌ Failed to enqueue AI analysis:', aiError);
+      }
+    } else {
+      console.log('✅ Report created with pre-analyzed AI data, skipping queue');
     }
 
     // Invalidate cached public reads (short TTL, fail-open)
@@ -260,8 +302,8 @@ export const createReport = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       id: reportId,
-      status: 'pending',
-      ai_check: 'queued',
+      status: initialStatus, // Return the actual status set
+      ai_check: aiScoreData ? 'completed' : 'queued',
       created_at: new Date().toISOString(),
       points_awarded: 0
     });

@@ -10,6 +10,10 @@ export interface AIAnalysisResult {
   explanation?: string; // Human-readable explanation
   vision_insights?: string[] | null; // Placeholder for future vision AI
   success: boolean; // Indicates if this is a real analysis or fallback
+  // Extended fields for report generation
+  category?: string;
+  title?: string;
+  description?: string;
 }
 
 export interface ReportForAnalysis {
@@ -26,8 +30,15 @@ export class AIService {
   private model: string;
 
   constructor(apiKey: string) {
-    this.apiKey = apiKey;
+    if (!apiKey || !apiKey.trim()) {
+      throw new Error('API key is required for AIService');
+    }
+    this.apiKey = apiKey.trim();
     this.model = process.env.OPENROUTER_MODEL?.trim() || "allenai/molmo-2-8b:free";
+    
+    // Log API key info (first few chars only for security)
+    console.log(`🤖 AIService initialized with model: ${this.model}`);
+    console.log(`   API key (first 15 chars): ${this.apiKey.substring(0, 15)}...`);
   }
 
   async analyzeReport(reportData: ReportForAnalysis): Promise<AIAnalysisResult> {
@@ -159,12 +170,129 @@ Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["ge
     `;
   }
 
+  async analyzeReportWithCustomPrompt(
+    reportData: ReportForAnalysis,
+    customPrompt: string
+  ): Promise<AIAnalysisResult> {
+    try {
+      // Try to extract image URLs from reportData.images
+      const imageUrls: string[] = Array.isArray(reportData.images)
+        ? reportData.images
+            .map((img: any) => {
+              if (!img) return null;
+              if (typeof img === 'string') return img;
+              if (typeof img === 'object' && typeof img.url === 'string') return img.url;
+              return null;
+            })
+            .filter((u: string | null): u is string => !!u)
+        : [];
+
+      // Build messages payload; for vision models we send text + images together
+      const userContent: any =
+        imageUrls.length > 0
+          ? [
+              { type: 'text', text: customPrompt },
+              ...imageUrls.map((url) => ({
+                type: 'image_url',
+                image_url: { url },
+              })),
+            ]
+          : customPrompt;
+      
+      const response = await axios.post(
+        `${this.baseURL}/chat/completions`,
+        {
+          model: this.model,
+          messages: [
+            {
+              role: "system",
+              content: "You are an AI assistant for a civic reporting app. Analyze images and generate report data including category, title, description, and legitimacy scores."
+            },
+            {
+              role: "user",
+              content: userContent
+            }
+          ],
+          max_tokens: 800 // Increased for more detailed responses
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const aiResponse = response.data.choices[0].message.content;
+      console.log('📥 Raw AI response (first 200 chars):', aiResponse.substring(0, 200));
+      const result = this.parseAIResponse(aiResponse);
+      console.log('📦 Parsed AI result:', {
+        hasCategory: !!result.category,
+        hasTitle: !!result.title,
+        hasDescription: !!result.description,
+        category: result.category,
+        title: result.title?.substring(0, 30),
+        success: result.success
+      });
+      // Preserve the success flag from parsing - don't override it
+      return result;
+      
+    } catch (error: any) {
+      // Better error handling - show actual error instead of generic message
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        const data = error.response.data;
+        
+        if (status === 401) {
+          console.error('❌ AI Service: Unauthorized (401) - Invalid API key');
+          console.error('   Error message:', data?.error?.message || 'User not found');
+          console.error('   Check your OPENROUTER_API_KEY in .env file');
+          console.error('   API key format should start with: sk-or-v1-');
+          console.error('   Current key (first 15 chars):', this.apiKey.substring(0, 15) + '...');
+          
+          // Throw error so it can be handled properly by the controller
+          throw new Error(`OpenRouter API authentication failed: ${data?.error?.message || 'Invalid API key'}. Please check your OPENROUTER_API_KEY in .env file.`);
+        } else if (status === 429) {
+          console.error('❌ AI Service: Rate limit exceeded (429)');
+          throw new Error('AI service rate limit exceeded. Please try again later.');
+        } else if (status === 400) {
+          console.error('❌ AI Service: Bad request (400)');
+          console.error('   Error details:', data);
+          throw new Error(`AI service error: ${data?.error?.message || 'Invalid request'}`);
+        } else {
+          console.error(`❌ AI Service error: ${status} ${statusText}`);
+          console.error('   Error details:', data);
+          throw new Error(`AI service error: ${data?.error?.message || statusText}`);
+        }
+      } else if (error.request) {
+        console.error('❌ AI Service: No response from OpenRouter API');
+        throw new Error('AI service unavailable. Please check your internet connection.');
+      } else {
+        console.error('❌ AI Service error:', error.message);
+        throw error; // Re-throw to preserve original error
+      }
+    }
+  }
+
   private parseAIResponse(response: string): AIAnalysisResult {
     try {
-      // Extract JSON from response
-      const jsonMatch = response.match(/\{.*\}/s); // 's' flag for multiline
+      // Extract JSON from response - try multiple patterns
+      let jsonMatch = response.match(/\{[\s\S]*\}/); // More flexible pattern
+      
+      // If no match, try to find JSON between code blocks
+      if (!jsonMatch) {
+        jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+        if (jsonMatch) {
+          jsonMatch = [jsonMatch[0], jsonMatch[1]]; // Use the captured group
+        }
+      }
+      
       if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
+        const jsonString = jsonMatch[1] || jsonMatch[0]; // Use captured group if available
+        const parsed = JSON.parse(jsonString);
+        
+        console.log('✅ Successfully parsed AI JSON response');
         
         // Calculate confidence_label if not provided
         if (!parsed.confidence_label && parsed.legit !== undefined) {
@@ -180,20 +308,31 @@ Example: {"legit": 0.8, "severity": 0.7, "duplicate_prob": 0.1, "insights": ["ge
           parsed.explanation = 'Analysis completed based on report content and context.';
         }
         
+        // Validate that we have the required fields for report generation
+        if (!parsed.category && !parsed.title && !parsed.description) {
+          console.warn('⚠️  AI response missing category, title, and description fields');
+          console.warn('   Response keys:', Object.keys(parsed));
+        }
+        
         return { ...parsed, success: true };
+      } else {
+        console.error('❌ No JSON found in AI response');
+        console.error('   Response (first 500 chars):', response.substring(0, 500));
       }
-    } catch (error) {
-      console.error('Failed to parse AI response:', error);
+    } catch (error: any) {
+      console.error('❌ Failed to parse AI response:', error.message);
+      console.error('   Response (first 500 chars):', response.substring(0, 500));
     }
     
-    // Fallback if parsing fails
+    // Fallback if parsing fails - but this should not happen if API is working
+    console.error('❌ Returning fallback response - AI parsing failed');
     return {
       legit: 0.5,
       severity: 0.5,
       duplicate_prob: 0,
       insights: ['response_parse_failed'],
       confidence_label: 'medium',
-      explanation: 'Analysis temporarily unavailable.',
+      explanation: 'Failed to parse AI response. Please check server logs.',
       success: false
     };
   }

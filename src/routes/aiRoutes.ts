@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { 
   updateAIResult, 
-  getPendingAIReports 
+  getPendingAIReports
 } from '../controllers/aiController';
 
 const router = Router();
