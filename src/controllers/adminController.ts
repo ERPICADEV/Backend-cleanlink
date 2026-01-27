@@ -6,6 +6,7 @@ import { pool } from '../config/postgres'
 import { randomUUID } from 'crypto'
 import { calculateLevel, LEVEL_CONFIG } from '../utils/levelConfig'
 import { NotificationService } from '../services/notificationService'
+import { teamService } from '../services/teamService'
 
 // ==================== UPDATED: GET /api/v1/admin/reports ====================
 export const getAdminReports = async (req: Request, res: Response) => {
@@ -525,6 +526,85 @@ export const resolveReport = async (req: Request, res: Response) => {
       throw error
     } finally {
       client.release()
+    }
+
+    // Trigger team area calculation (non-blocking, runs after transaction)
+    // Only trigger if report is resolved (not invalid/duplicate) and has location
+    if (finalStatus === 'resolved' && report.reporter_id && report.location) {
+      try {
+        // Parse location if it's a string
+        let locationData = report.location;
+        if (typeof locationData === 'string') {
+          try {
+            locationData = JSON.parse(locationData);
+          } catch {
+            // If parsing fails, skip team integration
+            locationData = null;
+          }
+        }
+
+        if (locationData && locationData.lat && locationData.lng) {
+          // Get reporter username
+          const reporterResult = await pool.query(
+            'SELECT username FROM users WHERE id = $1',
+            [report.reporter_id]
+          );
+
+          if (reporterResult.rows[0]?.username) {
+            const reporterUsername = reporterResult.rows[0].username;
+            const latitude = parseFloat(locationData.lat);
+            const longitude = parseFloat(locationData.lng);
+
+            // Call Django service to trigger report (non-blocking)
+            teamService.triggerReport(reporterUsername, latitude, longitude)
+              .then(async (result) => {
+                // If area was created or expanded, update our database
+                if (result.report_added && result.boundary) {
+                  try {
+                    // Get team_id from Django (we need to find which team this reporter belongs to)
+                    const teams = await teamService.getTeams();
+                    const reporterTeam = teams.find((team: any) => {
+                      // Handle different response formats from Django
+                      if (Array.isArray(team.members)) {
+                        return team.members.some((member: any) => {
+                          if (typeof member === 'string') {
+                            return member === reporterUsername;
+                          }
+                          return member.username === reporterUsername || member === reporterUsername;
+                        });
+                      }
+                      // If members is not an array, check if it's a single value or object
+                      return false;
+                    });
+
+                    if (reporterTeam?.id) {
+                      // Update or insert area boundary
+                      await pool.query(
+                        `INSERT INTO team_areas (team_id, area_boundary, updated_at)
+                         VALUES ($1, $2, CURRENT_TIMESTAMP)
+                         ON CONFLICT (team_id) 
+                         DO UPDATE SET area_boundary = $2, updated_at = CURRENT_TIMESTAMP`,
+                        [reporterTeam.id, JSON.stringify(result.boundary)]
+                      );
+                      console.log(`✅ Updated area boundary for team ${reporterTeam.id} (${result.area_created ? 'created' : result.area_expanded ? 'expanded' : 'updated'})`);
+                    } else {
+                      console.warn(`⚠️ Could not find team for reporter ${reporterUsername}`);
+                    }
+                  } catch (error) {
+                    console.error('⚠️ Failed to update team area boundary:', error);
+                  }
+                }
+              })
+              .catch((error) => {
+                // Log but don't fail the request
+                console.error('⚠️ Team service integration failed (non-critical):', error.message);
+              });
+          }
+        }
+      } catch (error) {
+        // Log but don't fail the request - team integration is non-critical
+        console.error('⚠️ Team service integration error (non-critical):', error);
+      }
     }
 
     return res.status(200).json({
@@ -1306,6 +1386,85 @@ export const approveReportWork = async (req: Request, res: Response) => {
       throw error
     } finally {
       client.release()
+    }
+
+    // Trigger team area calculation (non-blocking, runs after transaction)
+    // Only trigger if report has location and reporter
+    if (report.reporter_id && report.location) {
+      try {
+        // Parse location if it's a string
+        let locationData = report.location;
+        if (typeof locationData === 'string') {
+          try {
+            locationData = JSON.parse(locationData);
+          } catch {
+            // If parsing fails, skip team integration
+            locationData = null;
+          }
+        }
+
+        if (locationData && locationData.lat && locationData.lng) {
+          // Get reporter username
+          const reporterResult = await pool.query(
+            'SELECT username FROM users WHERE id = $1',
+            [report.reporter_id]
+          );
+
+          if (reporterResult.rows[0]?.username) {
+            const reporterUsername = reporterResult.rows[0].username;
+            const latitude = parseFloat(locationData.lat);
+            const longitude = parseFloat(locationData.lng);
+
+            // Call Django service to trigger report (non-blocking)
+            teamService.triggerReport(reporterUsername, latitude, longitude)
+              .then(async (result) => {
+                // If area was created or expanded, update our database
+                if (result.report_added && result.boundary) {
+                  try {
+                    // Get team_id from Django (we need to find which team this reporter belongs to)
+                    const teams = await teamService.getTeams();
+                    const reporterTeam = teams.find((team: any) => {
+                      // Handle different response formats from Django
+                      if (Array.isArray(team.members)) {
+                        return team.members.some((member: any) => {
+                          if (typeof member === 'string') {
+                            return member === reporterUsername;
+                          }
+                          return member.username === reporterUsername || member === reporterUsername;
+                        });
+                      }
+                      // If members is not an array, check if it's a single value or object
+                      return false;
+                    });
+
+                    if (reporterTeam?.id) {
+                      // Update or insert area boundary
+                      await pool.query(
+                        `INSERT INTO team_areas (team_id, area_boundary, updated_at)
+                         VALUES ($1, $2, CURRENT_TIMESTAMP)
+                         ON CONFLICT (team_id) 
+                         DO UPDATE SET area_boundary = $2, updated_at = CURRENT_TIMESTAMP`,
+                        [reporterTeam.id, JSON.stringify(result.boundary)]
+                      );
+                      console.log(`✅ Updated area boundary for team ${reporterTeam.id} (${result.area_created ? 'created' : result.area_expanded ? 'expanded' : 'updated'})`);
+                    } else {
+                      console.warn(`⚠️ Could not find team for reporter ${reporterUsername}`);
+                    }
+                  } catch (error) {
+                    console.error('⚠️ Failed to update team area boundary:', error);
+                  }
+                }
+              })
+              .catch((error) => {
+                // Log but don't fail the request
+                console.error('⚠️ Team service integration failed (non-critical):', error.message);
+              });
+          }
+        }
+      } catch (error) {
+        // Log but don't fail the request - team integration is non-critical
+        console.error('⚠️ Team service integration error (non-critical):', error);
+      }
     }
 
     return res.status(200).json({

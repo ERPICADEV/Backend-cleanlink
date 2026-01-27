@@ -20,6 +20,7 @@ import rewardRoutes from './routes/rewardRoutes';
 import aiRoutes from './routes/aiRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import mapRoutes from './routes/mapRoutes';
+import teamRoutes from './routes/teamRoutes';
 import path from 'path';
 
 // Check critical environment variables
@@ -140,6 +141,7 @@ app.use('/api/v1/rewards', rewardRoutes);
 app.use('/internal/ai', aiRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/map', mapRoutes);
+app.use('/api/v1/teams', teamRoutes);
 
 // Root route - friendly message
 app.get('/', (req, res) => {
@@ -169,7 +171,8 @@ app.get('/api/v1', (req, res) => {
       '/api/v1/admin',
       '/api/v1/rewards',
       '/api/v1/notifications',
-      '/api/v1/map'
+      '/api/v1/map',
+      '/api/v1/teams'
     ],
     docs: 'Refer to README or swagger docs (if enabled)'
   });
